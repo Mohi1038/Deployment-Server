@@ -70,7 +70,7 @@
 - **Containerization**: Docker, Docker Compose
 - **Web Server**: NGINX
 - **Credential Storage**: AWS S3
-- **CI/CD & Automation**: DeployBase (Probot App)
+- **CI/CD & Automation**: DeployBase (Github Probot App)
 
 ---
 
@@ -82,7 +82,8 @@
 - Docker & Docker Compose
 - Terraform (>= 1.0)
 - AWS & GCP accounts with appropriate permissions
-- GitHub App credentials (for DeployBase)
+- GitHub App credentials (for DeployBase
+
 
 ### 1. Clone the Repository
 
