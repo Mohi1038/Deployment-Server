@@ -95,11 +95,8 @@ if [ "$BACKEND_PRESENT" == "yes" ]; then
 EOF
 fi
 
-# Deny access to hidden files
-cat >> "$CONF_PATH" <<EOF
-    location ~ /\. {
-        deny all;
-    }
+# Close server block
+cat >> "$CONF_PATH" << 'EOF'
 }
 EOF
 

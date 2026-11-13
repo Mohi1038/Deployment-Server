@@ -2,7 +2,25 @@
    Deployment Server  |  app.js
    ============================================================ */
 
-const API = window.DEPLOYMENT_SERVER_API_URL || localStorage.getItem('backend_api_url') || '';  // same-origin or configured remote backend
+// Check query param ?api=... for easy 1-click backend setting
+const _urlParams = new URLSearchParams(window.location.search);
+if (_urlParams.get('api')) {
+  localStorage.setItem('backend_api_url', _urlParams.get('api').replace(/\/+$/, ''));
+}
+
+// Option 2 Backend Connection:
+// On Vercel / remote host, default to http://localhost:3000 if not explicitly configured
+function resolveBackendUrl() {
+  const saved = localStorage.getItem('backend_api_url');
+  if (saved !== null && saved !== undefined) return saved.trim().replace(/\/+$/, '');
+  if (window.DEPLOYMENT_SERVER_API_URL) return window.DEPLOYMENT_SERVER_API_URL.replace(/\/+$/, '');
+  if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+    return 'http://localhost:3000'; // Default Option 2: local backend engine
+  }
+  return ''; // Same-origin on localhost
+}
+
+let API = resolveBackendUrl();
 
 // ══════════════════════════════════════════════════════
 // TOAST
@@ -783,9 +801,9 @@ let activeOAuthPopup = null;
 
 // Industry-Standard PostMessage Handshake for OAuth Popups (RFC 6749)
 window.addEventListener('message', (event) => {
-  if (event.origin !== window.location.origin) return;
-
+  // Accept OAuth messages from the backend origin (may differ when frontend is on Vercel)
   const data = event.data;
+  if (!data || (data.type !== 'DEPLOYMENT_SERVER_OAUTH_SUCCESS' && data.type !== 'DEPLOYMENT_SERVER_OAUTH_ERROR')) return;
   if (data?.type === 'DEPLOYMENT_SERVER_OAUTH_SUCCESS') {
     authToken = data.token;
     currentUser = data.user;
@@ -794,7 +812,6 @@ window.addEventListener('message', (event) => {
 
     document.getElementById('auth-modal').classList.remove('open');
     document.getElementById('register-modal').classList.remove('open');
-    document.getElementById('oauth-setup-modal').classList.remove('open');
 
     updateAuthUI();
     toast(`Authenticated with ${data.provider === 'google' ? 'Google' : 'GitHub'}! Welcome, ${currentUser.name || currentUser.email} 🚀`, 'success');
@@ -821,7 +838,7 @@ function handleSocialOAuth(provider) {
   activeOAuthProvider = provider;
   const w = provider === 'google' ? 500 : 540;
   const h = provider === 'google' ? 620 : 680;
-  openOAuthPopup(`/api/auth/${provider}`, `${provider.toUpperCase()} Sign In`, w, h);
+  openOAuthPopup(`${API}/api/auth/${provider}`, `${provider.toUpperCase()} Sign In`, w, h);
 }
 
 function getAuthHeaders() {
@@ -1530,8 +1547,104 @@ document.getElementById('terminal-modal').addEventListener('click', e => {
 });
 
 // ══════════════════════════════════════════════════════
+// BACKEND STATUS & CONFIGURATION (OPTION 2)
+// ══════════════════════════════════════════════════════
+async function checkBackendHealth() {
+  const dot = document.getElementById('backend-status-dot');
+  const txt = document.getElementById('backend-status-text');
+  if (!dot || !txt) return;
+
+  const displayUrl = API ? API.replace(/^https?:\/\//, '') : 'Same Origin';
+
+  try {
+    const res = await fetch((API || '') + '/api/system/stats', { signal: AbortSignal.timeout(3500) });
+    if (res.ok) {
+      dot.style.background = '#10B981';
+      txt.textContent = `API: ${displayUrl}`;
+      txt.title = `Connected to ${API || window.location.origin}`;
+    } else {
+      dot.style.background = '#F59E0B';
+      txt.textContent = `API: ${res.status}`;
+      txt.title = `Backend returned HTTP ${res.status}`;
+    }
+  } catch (err) {
+    dot.style.background = '#EF4444';
+    txt.textContent = 'API: Disconnected';
+    txt.title = `Cannot reach backend at ${API || window.location.origin}. Click to configure.`;
+  }
+}
+
+const btnBackend = document.getElementById('btn-backend-status');
+const backendModal = document.getElementById('backend-modal');
+const closeBackendModal = document.getElementById('close-backend-modal');
+const cfgBackendInp = document.getElementById('cfg-backend-url');
+const testStatusEl = document.getElementById('backend-test-status');
+
+if (btnBackend) {
+  btnBackend.addEventListener('click', () => {
+    cfgBackendInp.value = localStorage.getItem('backend_api_url') || (window.location.hostname !== 'localhost' ? 'http://localhost:3000' : '');
+    testStatusEl.style.display = 'none';
+    backendModal.classList.add('open');
+  });
+}
+if (closeBackendModal) {
+  closeBackendModal.addEventListener('click', () => backendModal.classList.remove('open'));
+}
+if (backendModal) {
+  backendModal.addEventListener('click', e => {
+    if (e.target === backendModal) backendModal.classList.remove('open');
+  });
+}
+
+document.getElementById('btn-preset-local')?.addEventListener('click', () => {
+  cfgBackendInp.value = 'http://localhost:3000';
+});
+document.getElementById('btn-preset-same')?.addEventListener('click', () => {
+  cfgBackendInp.value = '';
+});
+
+document.getElementById('btn-test-backend')?.addEventListener('click', async () => {
+  const target = cfgBackendInp.value.trim().replace(/\/+$/, '');
+  testStatusEl.style.display = 'block';
+  testStatusEl.style.background = 'var(--surface-2)';
+  testStatusEl.style.color = 'var(--text)';
+  testStatusEl.textContent = 'Testing connection...';
+
+  try {
+    const res = await fetch((target || '') + '/api/system/stats', { signal: AbortSignal.timeout(4000) });
+    if (res.ok) {
+      const data = await res.json();
+      testStatusEl.style.background = 'rgba(16, 185, 129, 0.1)';
+      testStatusEl.style.color = '#10B981';
+      testStatusEl.textContent = `✓ Success! Backend reachable (Platform: ${data.stats?.platform || 'Deployment Server'}).`;
+    } else {
+      testStatusEl.style.background = 'rgba(239, 68, 68, 0.1)';
+      testStatusEl.style.color = '#EF4444';
+      testStatusEl.textContent = `HTTP ${res.status}: ${res.statusText}`;
+    }
+  } catch (err) {
+    testStatusEl.style.background = 'rgba(239, 68, 68, 0.1)';
+    testStatusEl.style.color = '#EF4444';
+    testStatusEl.textContent = `✗ Connection failed: ${err.message}. Make sure server is running.`;
+  }
+});
+
+document.getElementById('btn-save-backend')?.addEventListener('click', () => {
+  const target = cfgBackendInp.value.trim().replace(/\/+$/, '');
+  if (target) {
+    localStorage.setItem('backend_api_url', target);
+  } else {
+    localStorage.removeItem('backend_api_url');
+  }
+  toast('Backend API URL saved! Reloading...', 'success');
+  setTimeout(() => window.location.reload(), 500);
+});
+
+// ══════════════════════════════════════════════════════
 // BOOTSTRAP
 // ══════════════════════════════════════════════════════
 updateAuthUI();
+checkBackendHealth();
+setInterval(checkBackendHealth, 15000);
 
 loadOverview();

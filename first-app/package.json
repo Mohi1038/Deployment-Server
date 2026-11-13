@@ -2,21 +2,21 @@
   "name": "first-app",
   "version": "1.0.0",
   "private": true,
-  "description": "A probot app",
+  "description": "DeployBase Probot App for Google Cloud Platform by Devlups Lab",
   "author": "Mohit Meemrauth",
   "license": "ISC",
-  "homepage": "https://github.com//",
+  "homepage": "https://github.com/Mohi1038/Deployment-Server",
   "keywords": [
     "probot",
     "github",
-    "probot-app"
+    "probot-app",
+    "gcp"
   ],
   "scripts": {
     "start": "probot run ./index.js",
     "test": "node --test"
   },
   "dependencies": {
-    "aws-sdk": "^2.1692.0",
     "node-fetch": "^3.3.2",
     "probot": "^13.0.1"
   },

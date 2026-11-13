@@ -229,15 +229,13 @@ app.post('/api/auth/oauth/configure', (req, res) => {
 // Google OAuth redirect initiation (RFC 6749 + OIDC with CSRF State Nonce)
 app.get('/api/auth/google', (req, res) => {
   const clientId = process.env.GOOGLE_CLIENT_ID;
+  const redirectUri = `${req.protocol}://${req.get('host')}/api/auth/google/callback`;
   if (!clientId) {
-    // Render authentic Google Identity Services Account Chooser UI
-    return res.send(authService.renderGoogleAccountChooserHtml());
+    return res.send(authService.renderOAuthSetupHtml({ provider: 'google', redirectUri }));
   }
 
   const state = authService.generateOAuthState();
   res.setHeader('Set-Cookie', `oauth_state=${state}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`);
-
-  const redirectUri = `${req.protocol}://${req.get('host')}/api/auth/google/callback`;
   const scope = encodeURIComponent('openid email profile');
   const googleAuthUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${scope}&state=${state}&access_type=offline&prompt=select_account`;
   res.redirect(googleAuthUrl);
@@ -333,15 +331,13 @@ app.get('/api/auth/google/callback', async (req, res) => {
 // GitHub OAuth redirect initiation (RFC 6749 with CSRF State Nonce)
 app.get('/api/auth/github', (req, res) => {
   const clientId = process.env.GITHUB_CLIENT_ID;
+  const redirectUri = `${req.protocol}://${req.get('host')}/api/auth/github/callback`;
   if (!clientId) {
-    // Render authentic GitHub Login & Authorization UI
-    return res.send(authService.renderGithubLoginHtml());
+    return res.send(authService.renderOAuthSetupHtml({ provider: 'github', redirectUri }));
   }
 
   const state = authService.generateOAuthState();
   res.setHeader('Set-Cookie', `oauth_state=${state}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`);
-
-  const redirectUri = `${req.protocol}://${req.get('host')}/api/auth/github/callback`;
   const scope = encodeURIComponent('read:user user:email');
   const githubAuthUrl = `https://github.com/login/oauth/authorize?client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${scope}&state=${state}`;
   res.redirect(githubAuthUrl);
