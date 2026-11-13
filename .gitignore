@@ -1,0 +1,13 @@
+node_modules/
+.env
+data/
+
+gcp-auth/.terraform/
+gcp-auth/.terraform.lock.hcl
+gcp-auth/*.tfstate
+gcp-auth/*.tfstate.backup
+gcp-auth/*.tfvars
+gcp-auth/temp_*.json
+.DS_Store
+
+.vercel

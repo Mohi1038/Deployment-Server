@@ -1,0 +1,32 @@
+{
+  "name": "deployment-server",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Enterprise-grade cloud provisioning and application deployment platform for GCP by Devlups Lab",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js",
+    "dev": "node --watch server/server.js",
+    "bot": "cd first-app && npm start"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mohi1038/Deployment-Server.git"
+  },
+  "keywords": [
+    "gcp",
+    "deployment",
+    "devlups",
+    "terraform",
+    "nginx",
+    "docker"
+  ],
+  "author": "Mohit Meemrauth",
+  "license": "ISC",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "multer": "^1.4.5-lts.1"
+  }
+}

@@ -1,0 +1,1265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Deployment Server</title>
+  <link rel="stylesheet" href="/style.css" />
+  <link rel="icon" type="image/png" href="/assets/devlups-logo.png" />
+</head>
+<body>
+<div class="app-shell">
+
+  <!-- ═══════════════════════════════ HEADER ═══ -->
+  <header class="header">
+    <a class="header-brand" href="#overview" data-tab="overview">
+      <img src="/assets/devlups-logo.png" alt="Deployment Server" class="header-logo" />
+      <span class="header-title">Deployment Server</span>
+    </a>
+    <div class="header-right">
+      <!-- Multi-Tenant Workspace Selector -->
+      <div class="workspace-selector-wrap" style="display:flex;align-items:center;gap:6px">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+        <select id="workspace-select" style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);padding:4px 24px 4px 8px;font-size:12px;font-weight:600;cursor:pointer">
+          <option value="1">Production Workspace</option>
+          <option value="2">Staging &amp; Sandbox</option>
+        </select>
+        <button class="btn btn-outline btn-sm" id="btn-new-workspace" title="Create Workspace" style="padding:4px 8px;font-size:11px;font-weight:700">+</button>
+      </div>
+
+      <!-- User Auth Profile -->
+      <button class="btn btn-outline btn-sm" id="auth-btn" style="display:flex;align-items:center;gap:6px">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        <span id="auth-user-label">admin@devlups.com</span>
+      </button>
+
+      <span class="status-pill" id="sys-status-pill">
+        <span class="status-dot"></span>
+        HA Cluster Active
+      </span>
+    </div>
+  </header>
+
+  <!-- ═══════════════════════════════ SIDEBAR ═══ -->
+  <nav class="sidebar">
+    <span class="nav-label">Platform</span>
+    <button class="nav-item active" data-tab="overview">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+      Overview
+    </button>
+    <button class="nav-item" data-tab="deploy">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      New Deployment
+    </button>
+    <button class="nav-item" data-tab="instances">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+      Instances
+    </button>
+    <button class="nav-item" data-tab="observability">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+      Live Observability
+    </button>
+    <button class="nav-item" data-tab="logs">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+      Deployment Logs
+    </button>
+
+    <span class="nav-label">Configuration</span>
+    <button class="nav-item" data-tab="credentials">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      Cloud Credentials
+    </button>
+    <button class="nav-item" data-tab="platforms">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+      Cloud Platforms
+    </button>
+    <button class="nav-item" data-tab="integrations">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+      Integrations
+    </button>
+
+    <div class="sidebar-footer">
+      <p class="sidebar-footer-text">
+        Deployment Server &copy; 2025<br/>
+        v2.0 &mdash; High Availability Engine
+      </p>
+    </div>
+  </nav>
+
+  <!-- ═══════════════════════════════ MAIN ═══ -->
+  <main class="main" id="main-content">
+
+    <!-- ─────────── OVERVIEW ─────────── -->
+    <section class="tab-panel active" id="tab-overview">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Overview</h1>
+          <p class="page-subtitle">Live summary of your cloud deployments and infrastructure.</p>
+        </div>
+        <button class="btn btn-primary" data-tab-trigger="deploy">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          New Deployment
+        </button>
+      </div>
+
+      <!-- Stats -->
+      <div class="stats-grid" id="stats-grid">
+        <div class="stat-card c-primary">
+          <div class="stat-label">Total Deployments</div>
+          <div class="stat-value" id="stat-total">—</div>
+          <div class="stat-meta">All-time records</div>
+        </div>
+        <div class="stat-card c-success">
+          <div class="stat-label">Active Instances</div>
+          <div class="stat-value" id="stat-active">—</div>
+          <div class="stat-meta">Currently running</div>
+        </div>
+        <div class="stat-card c-accent">
+          <div class="stat-label">Cloud Credentials</div>
+          <div class="stat-value" id="stat-creds">—</div>
+          <div class="stat-meta" id="stat-creds-verified">— verified</div>
+        </div>
+        <div class="stat-card c-warning">
+          <div class="stat-label">System Uptime</div>
+          <div class="stat-value" id="stat-uptime">—</div>
+          <div class="stat-meta">Server process</div>
+        </div>
+      </div>
+
+      <!-- Recent deployments -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+            Recent Deployments
+          </span>
+          <button class="btn btn-outline btn-sm" data-tab-trigger="instances">View All</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Repository</th>
+                <th>Branch</th>
+                <th>Provider</th>
+                <th>Instance IP</th>
+                <th>Status</th>
+                <th>Deployed</th>
+              </tr>
+            </thead>
+            <tbody id="overview-table-body">
+              <tr><td colspan="6"><div class="empty-state"><div class="spinner spinner-dark"></div></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─────────── NEW DEPLOYMENT ─────────── -->
+    <section class="tab-panel" id="tab-deploy">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">New Deployment</h1>
+          <p class="page-subtitle">Deploy any Git repository to your preferred cloud provider.</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            Deployment Configuration
+          </span>
+        </div>
+        <div class="card-body">
+          <form id="deploy-form" class="form-section">
+
+            <div class="fieldset-title">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+              Repository
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="repo-name">Repository Name</label>
+                <input type="text" id="repo-name" name="repo_name" placeholder="my-web-app" required />
+              </div>
+              <div class="form-group">
+                <label for="git-username">Git Username</label>
+                <input type="text" id="git-username" name="git_username" placeholder="your-github-username" required />
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="repo-url">Repository URL</label>
+                <input type="url" id="repo-url" name="repo_url" placeholder="https://github.com/username/repo" required />
+              </div>
+              <div class="form-group">
+                <label for="repo-type">Visibility</label>
+                <select id="repo-type" name="repo_type">
+                  <option value="public">Public</option>
+                  <option value="private">Private</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="branch">Branch</label>
+                <input type="text" id="branch" name="branch" value="main" placeholder="main" />
+              </div>
+              <div class="form-group">
+                <label for="pat-token">Personal Access Token <span class="text-muted">(private repos)</span></label>
+                <input type="password" id="pat-token" name="pat_token" placeholder="ghp_..." autocomplete="off" />
+              </div>
+            </div>
+
+            <div class="fieldset-title" style="margin-top:8px">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+              Frontend
+            </div>
+
+            <div class="toggle-row">
+              <div>
+                <div class="toggle-label">Frontend Present</div>
+                <div class="toggle-sub">Enable if the repo contains a frontend build (React, Vue, Next.js, etc.)</div>
+              </div>
+              <select name="frontend_present" id="frontend-present" style="width:auto;padding:5px 28px 5px 10px">
+                <option value="yes">Yes</option>
+                <option value="no">No</option>
+              </select>
+            </div>
+
+            <div class="form-row" id="frontend-config">
+              <div class="form-group">
+                <label for="frontend-route">Frontend Route</label>
+                <input type="text" id="frontend-route" name="frontend_route" value="/" placeholder="/" />
+              </div>
+              <div class="form-group">
+                <label for="frontend-port">Frontend Port</label>
+                <input type="number" id="frontend-port" name="frontend_port" value="3000" min="1" max="65535" />
+              </div>
+            </div>
+
+            <div class="fieldset-title" style="margin-top:8px">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg>
+              Backend / API
+            </div>
+
+            <div class="toggle-row">
+              <div>
+                <div class="toggle-label">Backend Present</div>
+                <div class="toggle-sub">Enable if the repo exposes an API server (Express, FastAPI, Django, etc.)</div>
+              </div>
+              <select name="backend_present" id="backend-present" style="width:auto;padding:5px 28px 5px 10px">
+                <option value="yes">Yes</option>
+                <option value="no">No</option>
+              </select>
+            </div>
+
+            <div class="form-row" id="backend-config">
+              <div class="form-group">
+                <label for="backend-route">API Route Prefix</label>
+                <input type="text" id="backend-route" name="backend_route" value="/api" placeholder="/api" />
+              </div>
+              <div class="form-group">
+                <label for="backend-port">Backend Port</label>
+                <input type="number" id="backend-port" name="backend_port" value="5000" min="1" max="65535" />
+              </div>
+            </div>
+
+            <div class="fieldset-title" style="margin-top:8px">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9z"/></svg>
+              Cloud Infrastructure
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="gcp-cred-id">Cloud Credential Profile</label>
+                <select id="gcp-cred-id" name="gcp_credential_id">
+                  <option value="">— Select a credential —</option>
+                </select>
+                <span class="form-hint">Only verified credentials are shown. Add one under Cloud Credentials.</span>
+              </div>
+              <div class="form-group">
+                <label for="machine-type">Machine Type</label>
+                <select id="machine-type" name="machine_type">
+                  <option value="e2-micro">e2-micro (Free Tier / Low Load)</option>
+                  <option value="e2-small">e2-small (Light Workloads)</option>
+                  <option value="e2-medium" selected>e2-medium (Recommended)</option>
+                  <option value="e2-standard-2">e2-standard-2 (2 vCPU)</option>
+                  <option value="e2-standard-4">e2-standard-4 (4 vCPU)</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="vm-zone">Zone / Region</label>
+                <select id="vm-zone" name="vm_zone">
+                  <option value="asia-south1-a">Asia South 1 &mdash; Mumbai (a)</option>
+                  <option value="asia-south2-a">Asia South 2 &mdash; Delhi (a)</option>
+                  <option value="us-central1-a">US Central 1 &mdash; Iowa (a)</option>
+                  <option value="us-east1-b">US East 1 &mdash; S. Carolina (b)</option>
+                  <option value="europe-west1-b">Europe West 1 &mdash; Belgium (b)</option>
+                  <option value="asia-east1-a">Asia East 1 &mdash; Taiwan (a)</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="domain">Custom Domain <span class="text-muted">(optional)</span></label>
+                <input type="text" id="domain" name="domain" placeholder="app.yourdomain.com" />
+                <span class="form-hint">Leave blank to use the auto-assigned VM IP.</span>
+              </div>
+            </div>
+
+            <div class="fieldset-title" style="margin-top:8px">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+              Environment Secrets &amp; Add-ons
+            </div>
+
+            <div class="form-row">
+              <div class="form-group" style="flex:1">
+                <label for="env-vars">Environment Variables (.env)</label>
+                <textarea id="env-vars" name="env_vars" rows="3" placeholder="NODE_ENV=production&#10;API_SECRET=my_super_secret_key&#10;PORT=3000" style="font-family:monospace;font-size:12px;resize:vertical;"></textarea>
+                <span class="form-hint">Encrypted at rest with bank-grade AES-256-GCM. Injected at <code>/opt/&lt;repo&gt;/.env</code> (chmod 600).</span>
+              </div>
+              <div class="form-group" style="flex:1">
+                <label for="database-addon">1-Click Database Add-on</label>
+                <select id="database-addon" name="database_addon">
+                  <option value="none" selected>None (Stateless / App only)</option>
+                  <option value="postgres">PostgreSQL 15 (Persistent Alpine Container)</option>
+                  <option value="redis">Redis 7 (In-Memory Cache &amp; Queue)</option>
+                  <option value="mysql">MySQL 8 (Oracle Enterprise DB)</option>
+                  <option value="mongo">MongoDB 6 (NoSQL Document Store)</option>
+                </select>
+                <span class="form-hint">Automatically provisions container, mounts persistent volumes, and injects <code>DATABASE_URL</code> into <code>.env</code>.</span>
+              </div>
+            </div>
+
+            <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:8px">
+              <button type="button" class="btn btn-outline" id="clear-form-btn">Clear Form</button>
+              <button type="submit" class="btn btn-primary btn-lg" id="deploy-submit-btn">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+                Launch Deployment
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─────────── INSTANCES ─────────── -->
+    <section class="tab-panel" id="tab-instances">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Instances</h1>
+          <p class="page-subtitle">All provisioned cloud VMs and their current state.</p>
+        </div>
+        <button class="btn btn-outline btn-sm" id="refresh-instances-btn">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          Refresh
+        </button>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+            Deployment Records
+          </span>
+          <span id="instance-count" class="badge badge-info">Loading...</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Repository</th>
+                <th>Branch</th>
+                <th>Instance IP</th>
+                <th>HA Slot</th>
+                <th>Zone</th>
+                <th>Status</th>
+                <th>Created</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="instances-table-body">
+              <tr><td colspan="9"><div class="empty-state"><div class="spinner spinner-dark"></div></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─────────── LIVE OBSERVABILITY ─────────── -->
+    <section class="tab-panel" id="tab-observability">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Live Observability &amp; Cloud Monitoring</h1>
+          <p class="page-subtitle">GCP-grade timeseries telemetry, resource saturation, and self-healing health probes.</p>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span style="font-size:11.5px;color:var(--text-2);display:flex;align-items:center;gap:4px">
+            <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#10b981;animation:pulse 2s infinite"></span>
+            Live Telemetry Active
+          </span>
+          <button class="btn btn-outline btn-sm" id="refresh-observability-btn">Refresh Now</button>
+        </div>
+      </div>
+
+      <!-- Fleet Overview Cards -->
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px" id="observability-fleet">
+        <div class="stat-card c-primary" style="text-align:center">
+          <div class="stat-label">Fleet Avg CPU</div>
+          <div class="stat-value" id="obs-cpu">—</div>
+          <div class="stat-meta">Across all ready VMs</div>
+        </div>
+        <div class="stat-card c-success">
+          <div class="stat-label">Fleet Avg RAM</div>
+          <div class="stat-value" id="obs-ram">—</div>
+          <div class="stat-meta">Average utilisation</div>
+        </div>
+        <div class="stat-card c-accent">
+          <div class="stat-label">Total Network RX</div>
+          <div class="stat-value" id="obs-rx">—</div>
+          <div class="stat-meta">Inbound traffic</div>
+        </div>
+        <div class="stat-card c-warning">
+          <div class="stat-label">Active HA Slots</div>
+          <div class="stat-value" id="obs-slots">—</div>
+          <div class="stat-meta">Blue/Green containers</div>
+        </div>
+      </div>
+
+      <!-- GCP-STYLE CLOUD MONITORING TIMESERIES CHARTS -->
+      <div class="gcp-monitoring-dashboard" style="margin-bottom:16px">
+        <div class="gcp-controls-bar">
+          <div style="display:flex;align-items:center;gap:10px">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2"><path d="M3 3v18h18"/><path d="M18 9l-5 5-4-4-6 6"/></svg>
+            <span style="font-size:13px;font-weight:700">Metrics Explorer (GCP Monitoring View)</span>
+            <select id="gcp-metric-instance-select" style="background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);padding:3px 10px;font-size:12px;font-weight:600">
+              <option value="all">Fleet Aggregate (All Instances)</option>
+            </select>
+          </div>
+          <div class="gcp-time-filter">
+            <button class="gcp-time-btn active" data-range="live">Live (5s)</button>
+            <button class="gcp-time-btn" data-range="15m">15m</button>
+            <button class="gcp-time-btn" data-range="1h">1h</button>
+            <button class="gcp-time-btn" data-range="6h">6h</button>
+          </div>
+        </div>
+
+        <!-- 4 GCP Cloud Monitoring Charts with Axes -->
+        <div class="gcp-charts-grid">
+          <!-- 1. CPU Utilization (%) -->
+          <div class="gcp-chart-card">
+            <div class="gcp-chart-header">
+              <div class="gcp-chart-title">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/></svg>
+                CPU Utilization
+              </div>
+              <div class="gcp-chart-current-stat">
+                <span class="gcp-current-value" id="gcp-stat-cpu" style="color:var(--primary)">0.0</span>
+                <span class="gcp-current-unit">%</span>
+              </div>
+            </div>
+            <div class="gcp-chart-legend">
+              <div class="gcp-legend-item"><span class="gcp-legend-dot" style="background:var(--primary)"></span> Usage (e2-micro)</div>
+              <div class="gcp-legend-item" style="color:var(--text-3);margin-left:auto">Threshold: 80%</div>
+            </div>
+            <div class="gcp-canvas-wrap" id="wrap-cpu-chart">
+              <canvas id="chart-cpu"></canvas>
+              <div class="gcp-chart-tooltip" id="tip-cpu"></div>
+            </div>
+          </div>
+
+          <!-- 2. Memory Usage (MB / %) -->
+          <div class="gcp-chart-card">
+            <div class="gcp-chart-header">
+              <div class="gcp-chart-title">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2v20M18 2v20M2 6h20M2 18h20"/></svg>
+                Memory Allocation &amp; Active
+              </div>
+              <div class="gcp-chart-current-stat">
+                <span class="gcp-current-value" id="gcp-stat-ram" style="color:#0284C7">0</span>
+                <span class="gcp-current-unit">MB</span>
+              </div>
+            </div>
+            <div class="gcp-chart-legend">
+              <div class="gcp-legend-item"><span class="gcp-legend-dot" style="background:#0284C7"></span> Allocated RAM</div>
+              <div class="gcp-legend-item" style="color:var(--text-3);margin-left:auto">Total: 1024 MB</div>
+            </div>
+            <div class="gcp-canvas-wrap" id="wrap-ram-chart">
+              <canvas id="chart-ram"></canvas>
+              <div class="gcp-chart-tooltip" id="tip-ram"></div>
+            </div>
+          </div>
+
+          <!-- 3. Network Throughput (RX / TX KB/s) -->
+          <div class="gcp-chart-card">
+            <div class="gcp-chart-header">
+              <div class="gcp-chart-title">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+                Network Bandwidth In/Out
+              </div>
+              <div class="gcp-chart-current-stat">
+                <span class="gcp-current-value" id="gcp-stat-net" style="color:#10B981">0</span>
+                <span class="gcp-current-unit">KB/s</span>
+              </div>
+            </div>
+            <div class="gcp-chart-legend">
+              <div class="gcp-legend-item"><span class="gcp-legend-dot" style="background:#10B981"></span> Inbound (RX)</div>
+              <div class="gcp-legend-item"><span class="gcp-legend-dot" style="background:var(--primary)"></span> Outbound (TX)</div>
+            </div>
+            <div class="gcp-canvas-wrap" id="wrap-net-chart">
+              <canvas id="chart-net"></canvas>
+              <div class="gcp-chart-tooltip" id="tip-net"></div>
+            </div>
+          </div>
+
+          <!-- 4. Disk I/O & IOPS -->
+          <div class="gcp-chart-card">
+            <div class="gcp-chart-header">
+              <div class="gcp-chart-title">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+                Disk Storage I/O
+              </div>
+              <div class="gcp-chart-current-stat">
+                <span class="gcp-current-value" id="gcp-stat-disk" style="color:var(--gcp-purple)">0</span>
+                <span class="gcp-current-unit">ops/s</span>
+              </div>
+            </div>
+            <div class="gcp-chart-legend">
+              <div class="gcp-legend-item"><span class="gcp-legend-dot" style="background:var(--gcp-purple)"></span> I/O Operations</div>
+              <div class="gcp-legend-item" style="color:var(--text-3);margin-left:auto">Provisioned SSD (20 GB)</div>
+            </div>
+            <div class="gcp-canvas-wrap" id="wrap-disk-chart">
+              <canvas id="chart-disk"></canvas>
+              <div class="gcp-chart-tooltip" id="tip-disk"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Per-Instance Telemetry Grid -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            Per-Instance Resource Allocation &amp; Telemetry
+          </span>
+          <span class="badge badge-ready" style="font-size:10px">● Live</span>
+        </div>
+        <div class="card-body">
+          <div id="observability-instances" style="display:flex;flex-direction:column;gap:14px">
+            <div class="empty-state">
+              <div class="empty-icon"><div class="spinner spinner-dark"></div></div>
+              <p class="empty-title">Loading telemetry...</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Health Check Log -->
+      <div class="card" style="margin-top:16px">
+        <div class="card-header">
+          <span class="card-title">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+            Automated HTTP Health Probes
+          </span>
+        </div>
+        <div class="log-terminal" id="health-probe-log" style="max-height:220px;padding:14px;font-size:12px">
+          <span class="log-info">[Health Monitor] Automated HTTP probing active on all ready instances...</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─────────── LOGS ─────────── -->
+    <section class="tab-panel" id="tab-logs">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Deployment Logs</h1>
+          <p class="page-subtitle">Real-time provisioning and build output for each deployment.</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            Select Deployment
+          </span>
+        </div>
+        <div class="card-body" style="display:flex;flex-direction:column;gap:14px">
+          <div class="form-group" style="max-width:420px">
+            <label for="log-dep-select">Deployment</label>
+            <select id="log-dep-select">
+              <option value="">— Select a deployment —</option>
+            </select>
+          </div>
+          <div id="log-output-wrap" style="display:none">
+            <div class="card-title" style="margin-bottom:8px;font-size:12px;color:var(--muted)" id="log-dep-label"></div>
+            <div class="log-terminal" id="log-terminal">Select a deployment above to view its logs.</div>
+          </div>
+          <div id="log-empty" class="empty-state">
+            <div class="empty-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            </div>
+            <p class="empty-title">No deployment selected</p>
+            <p class="empty-sub">Pick a deployment from the dropdown above to view its build and provisioning logs.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─────────── CREDENTIALS ─────────── -->
+    <section class="tab-panel" id="tab-credentials">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Cloud Credentials</h1>
+          <p class="page-subtitle">Manage service account keys and cloud provider access tokens.</p>
+        </div>
+        <button class="btn btn-primary" id="add-cred-btn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Add Credential
+        </button>
+      </div>
+
+      <div class="card" id="cred-list-card">
+        <div class="card-header">
+          <span class="card-title">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            Credential Profiles
+          </span>
+          <span id="cred-count" class="badge badge-info">Loading...</span>
+        </div>
+        <div class="card-body" style="display:flex;flex-direction:column;gap:10px" id="cred-list">
+          <div class="empty-state"><div class="spinner spinner-dark"></div></div>
+        </div>
+      </div>
+
+      <!-- Add Credential Form -->
+      <div class="card" id="add-cred-form-card" style="display:none">
+        <div class="card-header">
+          <span class="card-title">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add Cloud Credential
+          </span>
+          <button class="btn btn-ghost btn-sm" id="cancel-cred-btn">Cancel</button>
+        </div>
+        <div class="card-body">
+          <form id="cred-form" class="form-section">
+
+            <div class="form-row">
+              <div class="form-group">
+                <label for="cred-name">Profile Name</label>
+                <input type="text" id="cred-name" name="name" placeholder="e.g. Production AWS Account" required />
+              </div>
+              <div class="form-group">
+                <label for="cred-provider">Cloud Provider</label>
+                <select id="cred-provider" name="cloud_provider">
+                  <option value="gcp">Google Cloud Platform (GCP)</option>
+                  <option value="aws">Amazon Web Services (AWS)</option>
+                  <option value="azure">Microsoft Azure</option>
+                  <option value="digitalocean">DigitalOcean</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- GCP Fields -->
+            <div id="cred-fields-gcp">
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="cred-project">GCP Project ID</label>
+                  <input type="text" id="cred-project" name="project_id" placeholder="my-gcp-project-123" />
+                </div>
+                <div class="form-group">
+                  <label for="cred-region">Default Region</label>
+                  <select id="cred-region" name="region">
+                    <option value="asia-south1">asia-south1 (Mumbai)</option>
+                    <option value="asia-south2">asia-south2 (Delhi)</option>
+                    <option value="us-central1">us-central1 (Iowa)</option>
+                    <option value="us-east1">us-east1 (S. Carolina)</option>
+                    <option value="europe-west1">europe-west1 (Belgium)</option>
+                    <option value="asia-east1">asia-east1 (Taiwan)</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-group">
+                <label>Service Account JSON Key</label>
+                <textarea id="cred-json-gcp" name="credentials_json" placeholder='{"type":"service_account","project_id":"...","client_email":"...","private_key":"..."}' rows="7"></textarea>
+                <span class="form-hint">Download from GCP Console → IAM &amp; Admin → Service Accounts → Keys → Add Key (JSON).</span>
+              </div>
+            </div>
+
+            <!-- AWS Fields -->
+            <div id="cred-fields-aws" style="display:none;flex-direction:column;gap:16px">
+              <div class="form-row">
+                <div class="form-group">
+                  <label>AWS Access Key ID</label>
+                  <input type="text" name="access_key_id" id="cred-aws-key" placeholder="AKIAIOSFODNN7EXAMPLE" autocomplete="off" />
+                </div>
+                <div class="form-group">
+                  <label>AWS Secret Access Key</label>
+                  <input type="password" name="secret_access_key" id="cred-aws-secret" placeholder="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" autocomplete="off" />
+                </div>
+              </div>
+              <div class="form-group" style="max-width:300px">
+                <label>Default AWS Region</label>
+                <select name="aws_region" id="cred-aws-region">
+                  <option value="ap-south-1">ap-south-1 (Mumbai)</option>
+                  <option value="us-east-1">us-east-1 (N. Virginia)</option>
+                  <option value="us-east-2">us-east-2 (Ohio)</option>
+                  <option value="us-west-2">us-west-2 (Oregon)</option>
+                  <option value="eu-west-1">eu-west-1 (Ireland)</option>
+                  <option value="eu-central-1">eu-central-1 (Frankfurt)</option>
+                  <option value="ap-southeast-1">ap-southeast-1 (Singapore)</option>
+                  <option value="ap-northeast-1">ap-northeast-1 (Tokyo)</option>
+                </select>
+              </div>
+              <span class="form-hint">Create IAM User with <code>AmazonEC2FullAccess</code> policy. Generate Access Keys under Security Credentials.</span>
+            </div>
+
+            <!-- Azure Fields -->
+            <div id="cred-fields-azure" style="display:none;flex-direction:column;gap:16px">
+              <div class="form-row">
+                <div class="form-group">
+                  <label>Tenant ID</label>
+                  <input type="text" name="tenant_id" id="cred-azure-tenant" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="off" />
+                </div>
+                <div class="form-group">
+                  <label>Subscription ID</label>
+                  <input type="text" name="subscription_id" id="cred-azure-sub" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="off" />
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label>Client ID (App ID)</label>
+                  <input type="text" name="client_id" id="cred-azure-client" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="off" />
+                </div>
+                <div class="form-group">
+                  <label>Client Secret</label>
+                  <input type="password" name="client_secret" id="cred-azure-secret" placeholder="Your app registration client secret" autocomplete="off" />
+                </div>
+              </div>
+              <span class="form-hint">Create a Service Principal: <code>az ad sp create-for-rbac --role Contributor --scopes /subscriptions/&lt;id&gt;</code>. Assign <strong>Contributor</strong> role on your subscription.</span>
+            </div>
+
+            <!-- DigitalOcean Fields -->
+            <div id="cred-fields-do" style="display:none;flex-direction:column;gap:16px">
+              <div class="form-group" style="max-width:520px">
+                <label>API Token</label>
+                <input type="password" name="api_token" id="cred-do-token" placeholder="dop_v1_..." autocomplete="off" />
+                <span class="form-hint">Generate a Personal Access Token with <strong>Read &amp; Write</strong> scope from the DigitalOcean Control Panel → API → Tokens/Keys.</span>
+              </div>
+            </div>
+
+            <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:4px">
+              <button type="button" class="btn btn-outline" id="cancel-cred-btn-2">Cancel</button>
+              <button type="submit" class="btn btn-primary" id="cred-submit-btn">Save &amp; Verify Credential</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─────────── PLATFORMS ─────────── -->
+    <section class="tab-panel" id="tab-platforms">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Cloud Platforms</h1>
+          <p class="page-subtitle">Deployment Server supports multi-cloud deployments across all major providers.</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+            Supported Platforms
+          </span>
+        </div>
+        <div class="card-body">
+          <div class="platform-grid">
+
+            <div class="platform-card supported">
+              <span class="platform-badge">Live</span>
+              <div class="platform-logo" style="background:#EBF5FF">
+                <img src="/assets/gcp.png" alt="Google Cloud" />
+              </div>
+              <div class="platform-name">GCP</div>
+              <div class="platform-status">Google Cloud (Terraform)</div>
+            </div>
+
+            <div class="platform-card supported">
+              <span class="platform-badge">Live</span>
+              <div class="platform-logo" style="background:#FFF7ED">
+                <img src="/assets/aws.png" alt="Amazon Web Services" />
+              </div>
+              <div class="platform-name">AWS</div>
+              <div class="platform-status">EC2 (AWS CLI)</div>
+            </div>
+
+            <div class="platform-card supported">
+              <span class="platform-badge">Live</span>
+              <div class="platform-logo" style="background:#EFF6FF">
+                <img src="/assets/azure.png" alt="Microsoft Azure" />
+              </div>
+              <div class="platform-name">Azure</div>
+              <div class="platform-status">Virtual Machines (az CLI)</div>
+            </div>
+
+            <div class="platform-card supported">
+              <span class="platform-badge">Live</span>
+              <div class="platform-logo" style="background:#EDE9FE">
+                <img src="/assets/digitalocean.png" alt="DigitalOcean" />
+              </div>
+              <div class="platform-name">DigitalOcean</div>
+              <div class="platform-status">Droplets (REST API)</div>
+            </div>
+
+            <div class="platform-card coming-soon">
+              <span class="platform-badge soon">Soon</span>
+              <div class="platform-logo" style="background:#FEE2E2">
+                <img src="/assets/hetzner.png" alt="Hetzner" />
+              </div>
+              <div class="platform-name">Hetzner</div>
+              <div class="platform-status">Cloud VPS</div>
+            </div>
+
+            <div class="platform-card coming-soon">
+              <span class="platform-badge soon">Soon</span>
+              <div class="platform-logo" style="background:#EFF6FF">
+                <img src="/assets/vultr.png" alt="Vultr" />
+              </div>
+              <div class="platform-name">Vultr</div>
+              <div class="platform-status">Bare Metal</div>
+            </div>
+
+          </div>
+
+          <div style="margin-top:24px;padding:20px;background:var(--surface);border-radius:var(--radius);border:1px solid var(--border)">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px">
+              <div>
+                <h3 style="font-size:14px;font-weight:700;color:var(--text)">Multi-Cloud Cost Arbitrage Engine</h3>
+                <p style="font-size:12.5px;color:var(--muted)">Estimated server costs per provider. Auto-arbitrage selects the lowest cost provider for your workload.</p>
+              </div>
+              <span class="badge badge-ready" style="font-size:11px">Up to 60% Monthly Savings</span>
+            </div>
+            
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Provider</th>
+                    <th>Instance Type</th>
+                    <th>Specs</th>
+                    <th>Hourly</th>
+                    <th>Monthly</th>
+                    <th>Arbitrage Advantage</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>
+                      <div style="display:flex;align-items:center;gap:6px">
+                        <img src="/assets/digitalocean.png" style="width:16px;height:16px;object-fit:contain" alt="DO" />
+                        <strong>DigitalOcean</strong>
+                      </div>
+                    </td>
+                    <td><code>s-1vcpu-1gb</code></td>
+                    <td>1 vCPU &middot; 1 GB RAM</td>
+                    <td>$0.0059 / hr</td>
+                    <td><strong style="color:var(--success)">$4.00 / mo</strong></td>
+                    <td><span class="badge badge-ready">Lowest Cost</span></td>
+                  </tr>
+                  <tr>
+                    <td>
+                      <div style="display:flex;align-items:center;gap:6px">
+                        <img src="/assets/aws.png" style="width:16px;height:16px;object-fit:contain" alt="AWS" />
+                        <strong>AWS EC2</strong>
+                      </div>
+                    </td>
+                    <td><code>t4g.nano / t3.micro</code></td>
+                    <td>2 vCPU &middot; 1 GB RAM</td>
+                    <td>$0.0104 / hr</td>
+                    <td><strong>$7.59 / mo</strong></td>
+                    <td><span class="badge badge-info">Free Tier Eligible</span></td>
+                  </tr>
+                  <tr>
+                    <td>
+                      <div style="display:flex;align-items:center;gap:6px">
+                        <img src="/assets/azure.png" style="width:16px;height:16px;object-fit:contain" alt="Azure" />
+                        <strong>Microsoft Azure</strong>
+                      </div>
+                    </td>
+                    <td><code>Standard_B1s</code></td>
+                    <td>1 vCPU &middot; 1 GB RAM</td>
+                    <td>$0.0075 / hr</td>
+                    <td><strong>$5.48 / mo</strong></td>
+                    <td><span class="badge badge-info">Burstable CPU</span></td>
+                  </tr>
+                  <tr>
+                    <td>
+                      <div style="display:flex;align-items:center;gap:6px">
+                        <img src="/assets/gcp.png" style="width:16px;height:16px;object-fit:contain" alt="GCP" />
+                        <strong>Google Cloud</strong>
+                      </div>
+                    </td>
+                    <td><code>e2-micro</code></td>
+                    <td>2 vCPU &middot; 1 GB RAM</td>
+                    <td>$0.0084 / hr</td>
+                    <td><strong>$6.13 / mo</strong></td>
+                    <td><span class="badge badge-info">$300 Credit Compatible</span></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div style="margin-top:16px;padding:20px;background:linear-gradient(135deg,rgba(232,82,74,.05),rgba(91,200,245,.05));border-radius:var(--radius);border:1px solid var(--border)">
+            <h3 style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:6px">Architecture &amp; Self-Healing Engine</h3>
+            <p style="font-size:13px;color:var(--text-2);line-height:1.7">
+              Deployment Server uses <strong>Terraform &amp; Native Cloud CLIs</strong> to provision cloud VMs, automatically detects your stack (Docker Compose, Dockerfiles, Vite, Next.js, Python, or static HTML), builds and runs it inside a container, routes traffic through <strong>NGINX</strong> with automated <code>.sslip.io</code> subdomains, and conducts automated background HTTP health-checks.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─────────── INTEGRATIONS ─────────── -->
+    <section class="tab-panel" id="tab-integrations">
+      <div class="page-header">
+        <div>
+          <h1 class="page-title">Integrations</h1>
+          <p class="page-subtitle">Connect external services to trigger and automate deployments.</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+            GitHub App Webhook
+          </span>
+        </div>
+        <div class="card-body" style="display:flex;flex-direction:column;gap:16px">
+          <p style="font-size:13px;color:var(--text-2);line-height:1.7">
+            Connect your GitHub App or repository webhook to trigger automatic deployments on every push or when a deployment issue is opened.
+          </p>
+          <div class="form-group" style="max-width:520px">
+            <label>Webhook Endpoint</label>
+            <div style="display:flex;gap:8px;align-items:center">
+              <code id="webhook-url" style="flex:1;padding:9px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12.5px;color:var(--text);display:block">/api/webhook/github</code>
+              <button class="btn btn-outline btn-sm" id="copy-webhook-btn">Copy</button>
+            </div>
+            <span class="form-hint">Set this as your GitHub App webhook URL. Supported events: <code>push</code>, <code>installation_repositories</code>, <code>issues</code>.</span>
+          </div>
+
+          <div style="padding:16px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm)">
+            <h4 style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:10px">Supported Triggers</h4>
+            <ul style="list-style:none;display:flex;flex-direction:column;gap:8px">
+              <li style="font-size:13px;color:var(--text-2);display:flex;align-items:center;gap:8px">
+                <span class="badge badge-ready" style="font-size:10px">Active</span>
+                <strong>issue_comment / issues</strong> &mdash; Triggers ChatOps actions like <code>/deploy</code>, <code>/update</code>, <code>/status</code>
+              </li>
+              <li style="font-size:13px;color:var(--text-2);display:flex;align-items:center;gap:8px">
+                <span class="badge badge-ready" style="font-size:10px">Active</span>
+                <strong>push</strong> &mdash; Auto-reloads code in-place on git push in 4 seconds (zero downtime)
+              </li>
+              <li style="font-size:13px;color:var(--text-2);display:flex;align-items:center;gap:8px">
+                <span class="badge badge-ready" style="font-size:10px">Active</span>
+                <strong>installation_repositories</strong> &mdash; Auto-registers new repos when added to the GitHub App
+              </li>
+            </ul>
+          </div>
+
+          <!-- ChatOps Slash Commands Reference -->
+          <div style="padding:18px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius)">
+            <h4 style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:12px">GitHub ChatOps Slash Commands</h4>
+            <div style="display:flex;flex-direction:column;gap:10px">
+              <div style="display:flex;align-items:flex-start;gap:12px;padding:8px 12px;background:var(--bg);border-radius:var(--radius-sm)">
+                <code style="color:var(--primary);font-weight:600">/deploy [provider]</code>
+                <span style="font-size:12.5px;color:var(--text-2)">Launches deployment on specified cloud (<code>aws</code>, <code>gcp</code>, <code>azure</code>, <code>do</code>, or <code>cheapest</code>).</span>
+              </div>
+              <div style="display:flex;align-items:flex-start;gap:12px;padding:8px 12px;background:var(--bg);border-radius:var(--radius-sm)">
+                <code style="color:var(--primary);font-weight:600">/deploy cheapest</code>
+                <span style="font-size:12.5px;color:var(--text-2)">Analyzes pricing across all configured clouds and picks the lowest-cost provider automatically.</span>
+              </div>
+              <div style="display:flex;align-items:flex-start;gap:12px;padding:8px 12px;background:var(--bg);border-radius:var(--radius-sm)">
+                <code style="color:var(--primary);font-weight:600">/update</code>
+                <span style="font-size:12.5px;color:var(--text-2)">Fast in-place reload: pulls latest commit &amp; restarts container on existing VM in ~4 seconds without rebuilding infrastructure.</span>
+              </div>
+              <div style="display:flex;align-items:flex-start;gap:12px;padding:8px 12px;background:var(--bg);border-radius:var(--radius-sm)">
+                <code style="color:var(--primary);font-weight:600">/status</code>
+                <span style="font-size:12.5px;color:var(--text-2)">Replies with live public IP, automated subdomain URL, uptime, and current health status.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- Log Detail Modal -->
+<div class="modal-backdrop" id="log-modal">
+  <div class="modal" style="max-width:720px">
+    <div class="modal-header">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span class="modal-title" id="log-modal-title">Deployment Logs</span>
+        <span id="log-stream-badge" class="badge badge-ready" style="font-size:10px;padding:2px 6px;display:none">● Live Streaming</span>
+      </div>
+      <button class="btn btn-ghost btn-icon" id="close-log-modal">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="log-terminal" id="log-modal-content" style="max-height:500px"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" id="close-log-modal-2">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Live Container Telemetry / Metrics Modal -->
+<div class="modal-backdrop" id="metrics-modal">
+  <div class="modal" style="max-width:680px">
+    <div class="modal-header">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#10b981;box-shadow:0 0 8px #10b981"></span>
+        <span class="modal-title" id="metrics-modal-title">Live Container Telemetry</span>
+      </div>
+      <button class="btn btn-ghost btn-icon" id="close-metrics-modal">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body" style="display:flex;flex-direction:column;gap:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:var(--bg);border-radius:var(--radius-sm);font-size:12.5px;color:var(--text-2);border:1px solid var(--border)">
+        <span>Instance IP: <strong id="metric-ip" style="color:var(--text);font-family:monospace">-</strong></span>
+        <span>Status: <span id="metric-status" class="badge badge-ready">Running</span></span>
+        <span>Telemetry: <strong style="color:var(--primary)">Live (every 2s)</strong></span>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <!-- CPU Card -->
+        <div style="background:var(--bg);padding:14px;border-radius:var(--radius);border:1px solid var(--border)">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <span style="font-size:11.5px;font-weight:700;color:var(--text-2);text-transform:uppercase;letter-spacing:0.5px">CPU Load</span>
+            <span id="metric-cpu-val" style="font-size:15px;font-weight:700;color:var(--primary)">0.0%</span>
+          </div>
+          <div style="background:var(--surface);border-radius:6px;height:10px;overflow:hidden;border:1px solid var(--border)">
+            <div id="metric-cpu-bar" style="background:var(--primary);height:100%;width:0%;transition:width 0.4s ease"></div>
+          </div>
+          <span style="font-size:11px;color:var(--text-3);margin-top:6px;display:block">Burstable multi-core CPU quota</span>
+        </div>
+
+        <!-- RAM Card -->
+        <div style="background:var(--bg);padding:14px;border-radius:var(--radius);border:1px solid var(--border)">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <span style="font-size:11.5px;font-weight:700;color:var(--text-2);text-transform:uppercase;letter-spacing:0.5px">Memory (RAM)</span>
+            <span id="metric-ram-val" style="font-size:15px;font-weight:700;color:#3b82f6">0 / 0 MB</span>
+          </div>
+          <div style="background:var(--surface);border-radius:6px;height:10px;overflow:hidden;border:1px solid var(--border)">
+            <div id="metric-ram-bar" style="background:#3b82f6;height:100%;width:0%;transition:width 0.4s ease"></div>
+          </div>
+          <span id="metric-ram-sub" style="font-size:11px;color:var(--text-3);margin-top:6px;display:block">Resident set memory footprint</span>
+        </div>
+
+        <!-- Disk Card -->
+        <div style="background:var(--bg);padding:14px;border-radius:var(--radius);border:1px solid var(--border)">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <span style="font-size:11.5px;font-weight:700;color:var(--text-2);text-transform:uppercase;letter-spacing:0.5px">Root Disk</span>
+            <span id="metric-disk-val" style="font-size:15px;font-weight:700;color:#10b981">4.8 / 20 GB</span>
+          </div>
+          <div style="background:var(--surface);border-radius:6px;height:10px;overflow:hidden;border:1px solid var(--border)">
+            <div id="metric-disk-bar" style="background:#10b981;height:100%;width:24%;transition:width 0.4s ease"></div>
+          </div>
+          <span style="font-size:11px;color:var(--text-3);margin-top:6px;display:block">Persistent high-speed SSD volume</span>
+        </div>
+
+        <!-- Network I/O Card -->
+        <div style="background:var(--bg);padding:14px;border-radius:var(--radius);border:1px solid var(--border)">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <span style="font-size:11.5px;font-weight:700;color:var(--text-2);text-transform:uppercase;letter-spacing:0.5px">Network I/O</span>
+            <span id="metric-net-val" style="font-size:13px;font-weight:700;color:#8b5cf6">RX: 14 MB / TX: 28 MB</span>
+          </div>
+          <div style="background:var(--surface);border-radius:6px;height:10px;overflow:hidden;border:1px solid var(--border)">
+            <div style="background:#8b5cf6;height:100%;width:35%"></div>
+          </div>
+          <span style="font-size:11px;color:var(--text-3);margin-top:6px;display:block">Total ingress &amp; egress traffic</span>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-outline" id="close-metrics-modal-2">Close</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+
+<!-- ══════════════════════════════════════════════════════
+     AUTH LOGIN MODAL
+══════════════════════════════════════════════════════ -->
+<div class="modal-backdrop" id="auth-modal">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-header">
+      <span class="modal-title">Sign In to Deployment Server</span>
+      <button class="btn btn-ghost btn-icon" id="close-auth-modal">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body" style="display:flex;flex-direction:column;gap:14px">
+      <div style="text-align:center;padding:4px 0 2px">
+        <img src="/assets/devlups-logo.png" alt="Deployment Server Logo" style="height:44px;object-fit:contain;margin-bottom:6px" />
+        <div style="font-size:13px;font-weight:600;color:var(--text)">Deployment Server</div>
+        <div style="font-size:12px;color:var(--text-2)">Multi-Cloud Infrastructure Platform</div>
+      </div>
+
+      <div id="auth-error" style="display:none;padding:10px 12px;background:#fef2f2;border:1px solid #fca5a5;border-radius:var(--radius-sm);font-size:12.5px;color:#dc2626"></div>
+
+      <!-- Social OAuth Group -->
+      <div class="oauth-btn-group">
+        <button class="btn-oauth btn-oauth-google" id="btn-oauth-google">
+          <svg width="18" height="18" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/></svg>
+          Continue with Google
+        </button>
+        <button class="btn-oauth btn-oauth-github" id="btn-oauth-github">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>
+          Continue with GitHub
+        </button>
+      </div>
+
+      <div class="auth-divider">
+        <span>or continue with email</span>
+      </div>
+
+      <div class="form-group">
+        <label for="auth-email">Email Address</label>
+        <input type="email" id="auth-email" placeholder="admin@devlups.com" value="admin@devlups.com" autocomplete="username" />
+      </div>
+      <div class="form-group">
+        <label for="auth-password">Password</label>
+        <input type="password" id="auth-password" placeholder="Enter your password" value="admin123" autocomplete="current-password" />
+        <span class="form-hint">Default: admin@devlups.com / admin123</span>
+      </div>
+      <button class="btn btn-primary" id="auth-login-btn" style="width:100%;justify-content:center;padding:10px">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+        Sign In
+      </button>
+      <div style="text-align:center;font-size:12px;color:var(--text-3)">New team member? <a href="#" id="auth-switch-register" style="color:var(--accent)">Create account</a></div>
+    </div>
+  </div>
+</div>
+
+<!-- Register Modal -->
+<div class="modal-backdrop" id="register-modal">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-header">
+      <span class="modal-title">Create Deployment Server Account</span>
+      <button class="btn btn-ghost btn-icon" id="close-register-modal">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body" style="display:flex;flex-direction:column;gap:14px">
+      <!-- Social OAuth Group -->
+      <div class="oauth-btn-group">
+        <button class="btn-oauth btn-oauth-google" id="reg-oauth-google">
+          <svg width="18" height="18" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/></svg>
+          Sign Up with Google
+        </button>
+        <button class="btn-oauth btn-oauth-github" id="reg-oauth-github">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>
+          Sign Up with GitHub
+        </button>
+      </div>
+
+      <div class="auth-divider">
+        <span>or register with email</span>
+      </div>
+
+      <div class="form-group">
+        <label for="reg-name">Full Name</label>
+        <input type="text" id="reg-name" placeholder="Jane Smith" />
+      </div>
+      <div class="form-group">
+        <label for="reg-email">Email</label>
+        <input type="email" id="reg-email" placeholder="jane@company.com" />
+      </div>
+      <div class="form-group">
+        <label for="reg-password">Password</label>
+        <input type="password" id="reg-password" placeholder="Minimum 8 characters" />
+      </div>
+      <button class="btn btn-primary" id="register-btn" style="width:100%;justify-content:center">Create Account</button>
+      <div style="text-align:center;font-size:12px;color:var(--text-3)"><a href="#" id="auth-switch-login" style="color:var(--accent)">← Back to sign in</a></div>
+    </div>
+  </div>
+</div>
+
+<!-- New Workspace Modal -->
+<div class="modal-backdrop" id="new-workspace-modal">
+  <div class="modal" style="max-width:400px">
+    <div class="modal-header">
+      <span class="modal-title">New Workspace</span>
+      <button class="btn btn-ghost btn-icon" id="close-workspace-modal">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body" style="display:flex;flex-direction:column;gap:14px">
+      <div class="form-group">
+        <label for="ws-name">Workspace Name</label>
+        <input type="text" id="ws-name" placeholder="e.g. Dev Team Alpha" />
+      </div>
+      <div class="form-group">
+        <label for="ws-slug">Slug <span class="text-muted">(auto-generated)</span></label>
+        <input type="text" id="ws-slug" placeholder="dev-team-alpha" />
+      </div>
+      <button class="btn btn-primary" id="create-workspace-btn" style="width:100%;justify-content:center">Create Workspace</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════
+     WEB TERMINAL MODAL
+══════════════════════════════════════════════════════ -->
+<div class="modal-backdrop" id="terminal-modal">
+  <div class="modal" style="max-width:760px">
+    <div class="modal-header" style="background:#0d1117;border-bottom:1px solid #30363d">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="display:flex;gap:6px">
+          <span style="width:12px;height:12px;border-radius:50%;background:#ff5f56;cursor:pointer" id="terminal-close-dot"></span>
+          <span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span>
+          <span style="width:12px;height:12px;border-radius:50%;background:#27c93f"></span>
+        </div>
+        <span style="font-family:monospace;font-size:12px;color:#8b949e">devlups-terminal — <span id="terminal-host">instance</span></span>
+        <span class="badge badge-ready" style="font-size:10px;padding:2px 6px">● Connected</span>
+      </div>
+      <button class="btn btn-ghost btn-icon" id="close-terminal-modal" style="color:#8b949e">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div style="background:#0d1117;padding:0;border-bottom-left-radius:var(--radius);border-bottom-right-radius:var(--radius)">
+      <!-- Terminal Output -->
+      <div id="terminal-output" style="font-family:'JetBrains Mono',Consolas,monospace;font-size:12.5px;color:#e6edf3;padding:16px;min-height:300px;max-height:420px;overflow-y:auto;white-space:pre-wrap;line-height:1.6"></div>
+      <!-- Terminal Input Row -->
+      <div style="display:flex;align-items:center;padding:8px 16px 14px;border-top:1px solid #21262d;gap:8px">
+        <span style="font-family:monospace;font-size:12px;color:#3fb950;white-space:nowrap" id="terminal-prompt">root@devlups ~ $</span>
+        <input type="text" id="terminal-input" placeholder="Type a command... (docker ps, top, cat /etc/nginx/...)"
+          style="flex:1;background:transparent;border:none;outline:none;font-family:'JetBrains Mono',Consolas,monospace;font-size:12.5px;color:#e6edf3;caret-color:#3fb950" autocomplete="off" />
+        <button class="btn btn-ghost btn-sm" id="terminal-run-btn" style="color:#3fb950;border-color:#21262d;font-size:12px;white-space:nowrap">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          Run
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js" type="module"></script>
+</body>
+</html>
