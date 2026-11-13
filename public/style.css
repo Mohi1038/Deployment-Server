@@ -1113,3 +1113,185 @@ code, .mono {
 .gcp-chart-tooltip.visible {
   display: block;
 }
+
+
+/* ══════════════════════════════════════════════════════
+   LANDING AUTH VIEW (CHATGPT-STYLE FULLSCREEN)
+   ══════════════════════════════════════════════════════ */
+.landing-auth-container {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  width: 100vw; height: 100vh;
+  background: #000000;
+  color: #FFFFFF;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+  z-index: 10000;
+  font-family: "Plus Jakarta Sans", -apple-system, sans-serif;
+  padding: 28px 24px 20px;
+  overflow-y: auto;
+}
+.landing-header {
+  width: 100%;
+  max-width: 1200px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+.landing-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 19px;
+  font-weight: 700;
+  color: #FFFFFF;
+  letter-spacing: -0.3px;
+  text-decoration: none;
+}
+.landing-logo {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+}
+.landing-auth-card {
+  width: 100%;
+  max-width: 380px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: auto 0;
+}
+.landing-auth-title {
+  font-size: 32px;
+  font-weight: 700;
+  color: #FFFFFF;
+  margin-bottom: 24px;
+  letter-spacing: -0.5px;
+  text-align: center;
+}
+.landing-btn-social {
+  width: 100%;
+  height: 52px;
+  border-radius: 9999px;
+  background: transparent;
+  border: 1px solid #333333;
+  color: #FFFFFF;
+  font-size: 14px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  cursor: pointer;
+  margin-bottom: 12px;
+  transition: all 0.15s ease;
+  font-family: inherit;
+}
+.landing-btn-social:hover {
+  background: #171717;
+  border-color: #555555;
+  transform: translateY(-1px);
+}
+.landing-divider {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  margin: 14px 0 16px;
+  color: #737373;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+.landing-divider::before,
+.landing-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: #262626;
+}
+.landing-divider span {
+  padding: 0 14px;
+}
+.landing-input-wrap {
+  width: 100%;
+  margin-bottom: 12px;
+}
+.landing-input {
+  width: 100%;
+  height: 52px;
+  border-radius: 9999px;
+  border: 1px solid #333333;
+  background: transparent;
+  color: #FFFFFF;
+  font-size: 14px;
+  padding: 0 20px;
+  outline: none;
+  font-family: inherit;
+  transition: all 0.15s ease;
+}
+.landing-input:focus {
+  border-color: #5BC8F5;
+  box-shadow: 0 0 0 3px rgba(91, 200, 245, 0.2);
+}
+.landing-input::placeholder {
+  color: #737373;
+}
+.landing-btn-submit {
+  width: 100%;
+  height: 52px;
+  border-radius: 9999px;
+  border: none;
+  background: #FFFFFF;
+  color: #000000;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  margin-top: 4px;
+  margin-bottom: 14px;
+  transition: opacity 0.15s ease;
+  font-family: inherit;
+}
+.landing-btn-submit:hover {
+  opacity: 0.9;
+}
+.landing-error {
+  width: 100%;
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #F87171;
+  font-size: 12px;
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  text-align: center;
+}
+.landing-footer {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding-top: 16px;
+}
+.landing-footer-link {
+  color: #737373;
+  text-decoration: none;
+  font-size: 12px;
+  transition: color 0.15s ease;
+}
+.landing-footer-link:hover {
+  color: #D4D4D4;
+  text-decoration: underline;
+}
+
+/* Probot Connect Modal Styles */
+.probot-card-highlight {
+  background: #F0FDF4;
+  border: 1px solid #BBF7D0;
+  border-radius: 10px;
+  padding: 14px;
+  text-align: left;
+  margin: 14px 0;
+}

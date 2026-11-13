@@ -1,6 +1,10 @@
 {
   "version": 2,
+  "buildCommand": "",
+  "installCommand": "",
   "outputDirectory": "public",
-  "cleanUrls": true
+  "cleanUrls": true,
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
 }
-

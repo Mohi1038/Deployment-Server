@@ -6,9 +6,72 @@
   <title>Deployment Server</title>
   <link rel="stylesheet" href="/style.css" />
   <link rel="icon" type="image/png" href="/assets/devlups-logo.png" />
+  <!-- Google Identity Services for Native Multi-Account Chooser (Image 2) -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
-<div class="app-shell">
+
+<!-- ═══════════════════════════════ LANDING AUTH VIEW (CHATGPT-STYLE) ═══ -->
+<div id="landing-auth-view" class="landing-auth-container">
+  <div class="landing-header">
+    <div class="landing-brand">
+      <img src="/assets/devlups-logo.png" alt="Deployment Server" class="landing-logo" />
+      <span>Deployment Server</span>
+    </div>
+  </div>
+
+  <div class="landing-auth-card">
+    <h1 class="landing-auth-title">Log in or sign up</h1>
+
+    <!-- Continue with Google Button (GIS Multi-Account Chooser) -->
+    <button type="button" class="landing-btn-social" id="landing-btn-google">
+      <svg width="20" height="20" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/></svg>
+      <span>Continue with Google</span>
+    </button>
+
+    <!-- Continue with GitHub Button -->
+    <button type="button" class="landing-btn-social" id="landing-btn-github">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="#FFFFFF"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>
+      <span>Continue with GitHub</span>
+    </button>
+
+    <div class="landing-divider"><span>OR</span></div>
+
+    <!-- Email address field -->
+    <div class="landing-input-wrap">
+      <input type="email" id="landing-email" class="landing-input" placeholder="Email address" autocomplete="email" />
+    </div>
+
+    <!-- Password field (revealed on continue or toggle) -->
+    <div class="landing-input-wrap" id="landing-password-wrap" style="display:none">
+      <input type="password" id="landing-password" class="landing-input" placeholder="Password" autocomplete="current-password" />
+    </div>
+
+    <div id="landing-error" class="landing-error" style="display:none"></div>
+
+    <button type="button" class="landing-btn-submit" id="landing-btn-continue">
+      Continue
+    </button>
+
+    <div style="display:flex;justify-content:center;margin-top:4px">
+      <a href="#" id="landing-toggle-pass" style="color:#5BC8F5;font-size:12px;text-decoration:none">Sign in with password</a>
+    </div>
+  </div>
+
+  <div class="landing-footer">
+    <div style="display:flex;align-items:center;gap:16px">
+      <a href="#" class="landing-footer-link">Terms of use</a>
+      <span style="color:#404040">|</span>
+      <a href="#" class="landing-footer-link">Privacy policy</a>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:#737373">
+      <span id="landing-backend-dot" style="width:6px;height:6px;border-radius:50%;background:#10B981"></span>
+      <span id="landing-backend-text">Engine: localhost:3000</span>
+    </div>
+  </div>
+</div>
+
+<div class="app-shell" id="app-dashboard-shell" style="display:none">
 
   <!-- ═══════════════════════════════ HEADER ═══ -->
   <header class="header">
@@ -1292,6 +1355,75 @@
           Run
         </button>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════
+     PROBOT GITHUB APP ATTACHMENT MODAL (REQUIREMENT 3)
+══════════════════════════════════════════════════════ -->
+<div class="modal-backdrop" id="probot-connect-modal">
+  <div class="modal" style="max-width:500px;text-align:center;padding:28px 24px">
+    <div style="width:60px;height:60px;border-radius:50%;background:#F0FDF4;border:2px solid #86EFAC;display:flex;align-items:center;justify-content:center;margin:0 auto 16px">
+      <svg width="32" height="32" viewBox="0 0 24 24" fill="#16A34A"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+    </div>
+    <h3 style="font-size:20px;font-weight:700;margin-bottom:8px">GitHub Verified: @<span id="probot-github-username">User</span></h3>
+    <p style="font-size:13.5px;color:var(--text-3);line-height:1.55;margin-bottom:18px">
+      Attach the <strong>Deployment Server GitHub App (Probot)</strong> to your account to enable automatic multi-cloud CI/CD deployments and ChatOps slash commands.
+    </p>
+    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:14px 16px;text-align:left;margin-bottom:20px;font-size:12.5px">
+      <div style="font-weight:700;margin-bottom:8px;color:var(--text)">Capabilities Included:</div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;color:var(--text-2)">
+        <span style="color:#10B981;font-weight:bold">✓</span> Auto-deployment on <code>git push</code> to main
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;color:var(--text-2)">
+        <span style="color:#10B981;font-weight:bold">✓</span> ChatOps slash commands: <code>/deploy gcp</code>, <code>/update</code>, <code>/status</code>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;color:var(--text-2)">
+        <span style="color:#10B981;font-weight:bold">✓</span> Auto-allocates cloud VMs &amp; NGINX reverse proxies
+      </div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <a id="btn-install-probot-app" href="https://github.com/apps/devlups-deployment-bot/installations/new" target="_blank" rel="noopener" class="btn btn-primary" style="padding:12px;font-size:14px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px;text-decoration:none">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z"/></svg>
+        Attach App to your GitHub Repositories ↗
+      </a>
+      <button type="button" id="btn-probot-done" class="btn btn-outline" style="padding:10px;font-size:13px;justify-content:center">
+        I've Attached it / Continue to Dashboard
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════
+     GOOGLE ONE-TAP / GIS CLIENT ID CONFIG MODAL (IMAGE 2)
+══════════════════════════════════════════════════════ -->
+<div class="modal-backdrop" id="google-setup-modal">
+  <div class="modal" style="max-width:460px;padding:24px">
+    <div class="modal-header" style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <svg width="22" height="22" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/></svg>
+        <span class="modal-title" style="font-size:16px">Enable Official Google Account Chooser</span>
+      </div>
+      <button class="btn btn-ghost btn-icon" id="close-google-setup-modal">&times;</button>
+    </div>
+    <p style="font-size:12.5px;color:var(--text-3);line-height:1.5;margin-bottom:14px">
+      To display Google's native multi-account chooser dialog (Image 2), Google Identity Services requires an authorized Client ID.
+    </p>
+    <div class="form-group" style="margin-bottom:12px">
+      <label class="form-label" style="font-size:11px;font-weight:600">Google OAuth Client ID</label>
+      <input type="text" class="form-input" id="gsi-cfg-client-id" placeholder="xxxx.apps.googleusercontent.com" style="font-size:12px" />
+    </div>
+    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:11px;color:var(--text-3);margin-bottom:14px">
+      GCP Project: <strong>vcc-assignment-488913</strong> · Authorized Origin: <code>http://localhost:3000</code>, <code>https://deployment-server-rho.vercel.app</code>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <button type="button" class="btn btn-primary" id="btn-save-gsi-client" style="width:100%;justify-content:center">
+        Save Client ID &amp; Open Google Accounts
+      </button>
+      <button type="button" class="btn btn-outline" id="btn-quick-dev-login" style="width:100%;justify-content:center;font-size:12px">
+        ⚡ Developer 1-Click Login (Mohit / b23cs1038@iitj.ac.in)
+      </button>
     </div>
   </div>
 </div>

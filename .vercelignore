@@ -1,0 +1,13 @@
+node_modules/
+gcp-auth/
+data/
+server/
+first-app/
+.git/
+.env
+deploy.sh
+nginx_file.sh
+nginx-clone.sh
+keys.sh
+architecture.png
+

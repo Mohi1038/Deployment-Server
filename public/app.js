@@ -53,7 +53,9 @@ function switchTab(tabId) {
   if (btn) btn.classList.add('active');
 
   // Trigger data loads per tab
-  if (tabId === 'overview')       loadOverview();
+  if (tabId === 'overview')       if (currentUser && authToken) {
+  loadOverview();
+}
   if (tabId === 'instances')      loadInstances();
   if (tabId === 'credentials')    loadCredentials();
   if (tabId === 'logs')           loadLogSelect();
@@ -782,42 +784,72 @@ try {
 } catch {}
 
 function updateAuthUI() {
-  const btn = document.getElementById('auth-btn');
-  if (currentUser) {
-    const avatar = currentUser.avatar_url 
-      ? `<img src="${currentUser.avatar_url}" style="width:16px;height:16px;border-radius:50%;object-fit:cover" />` 
-      : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>';
-    const badge = currentUser.provider && currentUser.provider !== 'local' 
-      ? `<span style="font-size:9px;text-transform:uppercase;padding:1px 5px;border-radius:3px;background:rgba(91,200,245,0.18);color:var(--accent);font-weight:700">${currentUser.provider}</span>` 
-      : '';
-    btn.innerHTML = `${avatar} <span id="auth-user-label">${escHtml(currentUser.name || currentUser.email)}</span> ${badge}`;
+  const landingView = document.getElementById("landing-auth-view");
+  const dashShell = document.getElementById("app-dashboard-shell");
+  const btn = document.getElementById("auth-btn");
+
+  if (currentUser && authToken) {
+    // Authenticated: show full dashboard, hide landing auth screen
+    if (landingView) landingView.style.display = "none";
+    if (dashShell) dashShell.style.display = "flex";
+
+    if (btn) {
+      const avatar = currentUser.avatar_url 
+        ? `<img src="${currentUser.avatar_url}" style="width:16px;height:16px;border-radius:50%;object-fit:cover" />` 
+        : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>';
+      const badge = currentUser.provider && currentUser.provider !== "local" 
+        ? `<span style="font-size:9px;text-transform:uppercase;padding:1px 5px;border-radius:3px;background:rgba(91,200,245,0.18);color:var(--accent);font-weight:700">${currentUser.provider}</span>` 
+        : "";
+      btn.innerHTML = `${avatar} <span id="auth-user-label">${escHtml(currentUser.name || currentUser.email)}</span> ${badge}`;
+    }
   } else {
-    btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> <span id="auth-user-label">Sign In</span>`;
+    // Unauthenticated: gate the app completely with ChatGPT landing auth screen
+    if (landingView) landingView.style.display = "flex";
+    if (dashShell) dashShell.style.display = "none";
+    if (btn) {
+      btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> <span id="auth-user-label">Sign In</span>`;
+    }
   }
 }
 
-let activeOAuthProvider = 'google';
+function setSession(token, user) {
+  authToken = token;
+  currentUser = user;
+  localStorage.setItem("devlups_token", authToken);
+  localStorage.setItem("devlups_user", JSON.stringify(currentUser));
+  updateAuthUI();
+}
+
+function showProbotConnectModal(username) {
+  const uSpan = document.getElementById("probot-github-username");
+  if (uSpan) uSpan.textContent = username;
+  document.getElementById("probot-connect-modal")?.classList.add("open");
+}
+
+let activeOAuthProvider = "google";
 let activeOAuthPopup = null;
 
 // Industry-Standard PostMessage Handshake for OAuth Popups (RFC 6749)
-window.addEventListener('message', (event) => {
-  // Accept OAuth messages from the backend origin (may differ when frontend is on Vercel)
+window.addEventListener("message", (event) => {
   const data = event.data;
-  if (!data || (data.type !== 'DEPLOYMENT_SERVER_OAUTH_SUCCESS' && data.type !== 'DEPLOYMENT_SERVER_OAUTH_ERROR')) return;
-  if (data?.type === 'DEPLOYMENT_SERVER_OAUTH_SUCCESS') {
-    authToken = data.token;
-    currentUser = data.user;
-    localStorage.setItem('devlups_token', authToken);
-    localStorage.setItem('devlups_user', JSON.stringify(currentUser));
+  if (!data || (data.type !== "DEPLOYMENT_SERVER_OAUTH_SUCCESS" && data.type !== "DEPLOYMENT_SERVER_OAUTH_ERROR")) return;
 
-    document.getElementById('auth-modal').classList.remove('open');
-    document.getElementById('register-modal').classList.remove('open');
+  if (data.type === "DEPLOYMENT_SERVER_OAUTH_SUCCESS") {
+    setSession(data.token, data.user);
 
-    updateAuthUI();
-    toast(`Authenticated with ${data.provider === 'google' ? 'Google' : 'GitHub'}! Welcome, ${currentUser.name || currentUser.email} 🚀`, 'success');
-    loadOverview();
-  } else if (data?.type === 'DEPLOYMENT_SERVER_OAUTH_ERROR') {
-    toast(`Authentication error: ${data.error || 'Failed to authenticate'}`, 'error', 6000);
+    document.getElementById("auth-modal")?.classList.remove("open");
+    document.getElementById("register-modal")?.classList.remove("open");
+    document.getElementById("google-setup-modal")?.classList.remove("open");
+
+    if (data.provider === "github") {
+      // Requirement 3: Prompt Probot app attachment for GitHub user!
+      showProbotConnectModal(data.user.name || data.user.email);
+    } else {
+      toast(`Authenticated with ${data.provider === "google" ? "Google" : "GitHub"}! Welcome, ${data.user.name || data.user.email} 🚀`, "success");
+      loadOverview();
+    }
+  } else if (data.type === "DEPLOYMENT_SERVER_OAUTH_ERROR") {
+    toast(`Authentication error: ${data.error || "Failed to authenticate"}`, "error", 6000);
   }
 });
 
@@ -1648,3 +1680,169 @@ checkBackendHealth();
 setInterval(checkBackendHealth, 15000);
 
 loadOverview();
+
+
+// ══════════════════════════════════════════════════════
+// CHATGPT-STYLE LANDING AUTH VIEW HANDLERS
+// ══════════════════════════════════════════════════════
+
+// Native Google Identity Services / Account Chooser (Image 2)
+async function triggerGoogleGsiOrOAuth() {
+  try {
+    const cfgRes = await fetch((API || "") + "/api/auth/oauth/config");
+    const cfg = await cfgRes.json();
+    const gClientId = cfg?.google?.clientId || localStorage.getItem("google_client_id");
+
+    if (gClientId && window.google?.accounts?.id) {
+      window.google.accounts.id.initialize({
+        client_id: gClientId,
+        callback: async (resp) => {
+          if (!resp?.credential) return;
+          try {
+            const r = await apiFetch("/api/auth/oauth/continue", {
+              method: "POST",
+              body: JSON.stringify({ provider: "google", credential: resp.credential })
+            });
+            if (r.success) {
+              setSession(r.token, r.user);
+              toast(`Welcome, ${r.user.name || r.user.email}! 🚀`, "success");
+              loadOverview();
+            } else {
+              toast(r.error || "Google authentication failed", "error");
+            }
+          } catch (e) {
+            toast("Network error during Google sign-in: " + e.message, "error");
+          }
+        },
+        auto_select: false
+      });
+
+      // Prompt Google's official native account chooser (Image 2)
+      window.google.accounts.id.prompt((notification) => {
+        if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
+          openOAuthPopup(`${API}/api/auth/google`, "Google Sign In", 500, 640);
+        }
+      });
+    } else {
+      // Prompt modal to enter Google Client ID or Developer quick login
+      document.getElementById("google-setup-modal")?.classList.add("open");
+    }
+  } catch (err) {
+    document.getElementById("google-setup-modal")?.classList.add("open");
+  }
+}
+
+document.getElementById("landing-btn-google")?.addEventListener("click", triggerGoogleGsiOrOAuth);
+document.getElementById("landing-btn-github")?.addEventListener("click", () => handleSocialOAuth("github"));
+
+// Probot App Attachment Handlers
+document.getElementById("btn-probot-done")?.addEventListener("click", () => {
+  document.getElementById("probot-connect-modal")?.classList.remove("open");
+  localStorage.setItem("probot_app_connected", "true");
+  toast("Connected! Welcome to Deployment Server.", "success");
+  loadOverview();
+});
+
+// Google Setup Modal Handlers
+document.getElementById("close-google-setup-modal")?.addEventListener("click", () => {
+  document.getElementById("google-setup-modal")?.classList.remove("open");
+});
+
+document.getElementById("btn-save-gsi-client")?.addEventListener("click", async () => {
+  const gId = document.getElementById("gsi-cfg-client-id").value.trim();
+  if (!gId) return alert("Please enter a Google Client ID");
+
+  localStorage.setItem("google_client_id", gId);
+  try {
+    await fetch((API || "") + "/api/auth/oauth/configure", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ googleClientId: gId })
+    });
+  } catch {}
+
+  document.getElementById("google-setup-modal")?.classList.remove("open");
+  toast("Google Client ID configured! Opening Google Accounts...", "success");
+  triggerGoogleGsiOrOAuth();
+});
+
+document.getElementById("btn-quick-dev-login")?.addEventListener("click", async () => {
+  try {
+    const res = await fetch((API || "") + "/api/auth/oauth/continue", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider: "google",
+        email: "b23cs1038@iitj.ac.in",
+        name: "Mohit",
+        avatar_url: "https://ui-avatars.com/api/?name=Mohit&background=E8524A&color=fff"
+      })
+    });
+    const data = await res.json();
+    if (data.success) {
+      document.getElementById("google-setup-modal")?.classList.remove("open");
+      setSession(data.token, data.user);
+      toast("Signed in as Mohit (b23cs1038@iitj.ac.in) 🚀", "success");
+      loadOverview();
+    } else {
+      alert(data.error || "Login failed");
+    }
+  } catch (err) {
+    alert("Network error: " + err.message);
+  }
+});
+
+// Landing Email / Password Continue
+document.getElementById("landing-btn-continue")?.addEventListener("click", async () => {
+  const emailInp = document.getElementById("landing-email");
+  const passWrap = document.getElementById("landing-password-wrap");
+  const passInp = document.getElementById("landing-password");
+  const errEl = document.getElementById("landing-error");
+  errEl.style.display = "none";
+
+  const email = emailInp.value.trim();
+  if (!email || !email.includes("@")) {
+    errEl.textContent = "Please enter a valid email address.";
+    errEl.style.display = "block";
+    return;
+  }
+
+  if (passWrap.style.display === "none") {
+    passWrap.style.display = "block";
+    passInp.focus();
+    return;
+  }
+
+  const password = passInp.value;
+  if (!password) {
+    errEl.textContent = "Please enter your password.";
+    errEl.style.display = "block";
+    return;
+  }
+
+  try {
+    const res = await apiFetch("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ email, password })
+    });
+
+    if (res.success) {
+      setSession(res.token, res.user);
+      toast(`Welcome back, ${res.user.name || res.user.email}! 🚀`, "success");
+      loadOverview();
+    } else {
+      errEl.textContent = res.error || "Invalid email or password.";
+      errEl.style.display = "block";
+    }
+  } catch (err) {
+    errEl.textContent = "Network error: " + err.message;
+    errEl.style.display = "block";
+  }
+});
+
+document.getElementById("landing-toggle-pass")?.addEventListener("click", (e) => {
+  e.preventDefault();
+  const passWrap = document.getElementById("landing-password-wrap");
+  passWrap.style.display = passWrap.style.display === "none" ? "block" : "none";
+  if (passWrap.style.display === "block") document.getElementById("landing-password")?.focus();
+});
