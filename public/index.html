@@ -1395,49 +1395,6 @@
   </div>
 </div>
 
-<!-- ══════════════════════════════════════════════════════
-     GOOGLE ONE-TAP / GIS CLIENT ID CONFIG MODAL (IMAGE 2)
-══════════════════════════════════════════════════════ -->
-<div class="modal-backdrop" id="google-setup-modal">
-  <div class="modal" style="max-width:500px;padding:26px">
-    <div class="modal-header" style="margin-bottom:14px;display:flex;align-items:center;justify-content:space-between">
-      <div style="display:flex;align-items:center;gap:10px">
-        <svg width="24" height="24" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/></svg>
-        <span class="modal-title" style="font-size:17px;font-weight:700">Official Google Account Chooser</span>
-      </div>
-      <button class="btn btn-ghost btn-icon" id="close-google-setup-modal" style="font-size:18px;line-height:1">&times;</button>
-    </div>
-
-    <div style="background:#F0F9FF;border:1px solid #BAE6FD;border-radius:8px;padding:12px;font-size:12.5px;color:#0369A1;line-height:1.5;margin-bottom:14px">
-      <strong>How Google OAuth Works:</strong> Google only opens its native account chooser dialog when supplied with a free OAuth Client ID from Google Cloud Console.
-    </div>
-
-    <!-- Step by Step Guide -->
-    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;font-size:12px;color:var(--text-2);margin-bottom:14px;line-height:1.6">
-      <div style="font-weight:700;color:var(--text);margin-bottom:4px">How to get your Client ID in 2 minutes:</div>
-      1. Open <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener" style="color:var(--primary);font-weight:600">Google Cloud Console ↗</a> (Project: <code>vcc-assignment-488913</code>)<br/>
-      2. Click <strong>+ CREATE CREDENTIALS</strong> &rarr; <strong>OAuth client ID</strong> (Web application)<br/>
-      3. Set <strong>Authorized JavaScript origins</strong> to:<br/>
-      <code style="background:#E2E8F0;padding:1px 5px;border-radius:3px">https://deployment-server-rho.vercel.app</code> and <code style="background:#E2E8F0;padding:1px 5px;border-radius:3px">http://localhost:3000</code><br/>
-      4. Copy the generated <strong>Client ID</strong> and paste below:
-    </div>
-
-    <div class="form-group" style="margin-bottom:12px">
-      <label class="form-label" style="font-size:11px;font-weight:600">Google OAuth Client ID</label>
-      <input type="text" class="form-input" id="gsi-cfg-client-id" placeholder="123456789-xxxx.apps.googleusercontent.com" style="font-family:'JetBrains Mono',monospace;font-size:12px" />
-    </div>
-
-    <div style="display:flex;flex-direction:column;gap:8px">
-      <button type="button" class="btn btn-primary" id="btn-save-gsi-client" style="width:100%;justify-content:center;padding:10px">
-        Save Client ID &amp; Open Google Accounts
-      </button>
-      <button type="button" class="btn btn-outline" id="btn-quick-dev-login" style="width:100%;justify-content:center;font-size:12px;padding:9px">
-        ⚡ Test Now Without Client ID (Developer Login as Mohit)
-      </button>
-    </div>
-  </div>
-</div>
-
 <script src="/app.js" type="module"></script>
 </body>
 </html>

@@ -1686,24 +1686,14 @@ loadOverview();
 // CHATGPT-STYLE LANDING AUTH VIEW HANDLERS
 // ══════════════════════════════════════════════════════
 
+const PRODUCTION_GOOGLE_CLIENT_ID = "130895062908-rlr407sbhr21hhdvfch8nvhp6k9pgvpu.apps.googleusercontent.com";
+
 // Native Google Identity Services / Account Chooser (Image 2)
-async function triggerGoogleGsiOrOAuth() {
-  let gClientId = localStorage.getItem("google_client_id");
-
-  try {
-    const cfgRes = await fetch((API || "") + "/api/auth/oauth/config", { signal: AbortSignal.timeout(2500) });
-    if (cfgRes.ok) {
-      const cfg = await cfgRes.json();
-      if (cfg?.google?.clientId) gClientId = cfg.google.clientId;
-    }
-  } catch (err) {
-    console.warn("Backend oauth config check error:", err);
-  }
-
-  if (gClientId && window.google?.accounts?.id) {
+function triggerGoogleGsiOrOAuth() {
+  if (window.google?.accounts?.id) {
     try {
       window.google.accounts.id.initialize({
-        client_id: gClientId,
+        client_id: PRODUCTION_GOOGLE_CLIENT_ID,
         callback: async (resp) => {
           if (!resp?.credential) return;
           try {
@@ -1725,10 +1715,11 @@ async function triggerGoogleGsiOrOAuth() {
         auto_select: false
       });
 
-      // Prompt Google's official native account chooser (Image 2)
+      // Prompt Google's native multi-account selector (Image 2)
       window.google.accounts.id.prompt((notification) => {
         if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
-          openOAuthPopup(`${API}/api/auth/google`, "Google Sign In", 500, 640);
+          // Open direct Google OAuth popup
+          handleSocialOAuth("google");
         }
       });
       return;
@@ -1737,8 +1728,8 @@ async function triggerGoogleGsiOrOAuth() {
     }
   }
 
-  // Open the setup modal immediately on top of the screen
-  document.getElementById("google-setup-modal")?.classList.add("open");
+  // Fallback: direct Google OAuth popup
+  handleSocialOAuth("google");
 }
 
 document.getElementById("landing-btn-google")?.addEventListener("click", triggerGoogleGsiOrOAuth);
@@ -1749,69 +1740,6 @@ document.getElementById("btn-probot-done")?.addEventListener("click", () => {
   document.getElementById("probot-connect-modal")?.classList.remove("open");
   localStorage.setItem("probot_app_connected", "true");
   toast("Connected! Welcome to Deployment Server.", "success");
-  loadOverview();
-});
-
-// Google Setup Modal Handlers
-document.getElementById("close-google-setup-modal")?.addEventListener("click", () => {
-  document.getElementById("google-setup-modal")?.classList.remove("open");
-});
-
-document.getElementById("btn-save-gsi-client")?.addEventListener("click", async () => {
-  const gId = document.getElementById("gsi-cfg-client-id").value.trim();
-  if (!gId) return alert("Please enter a Google Client ID");
-
-  localStorage.setItem("google_client_id", gId);
-  try {
-    await fetch((API || "") + "/api/auth/oauth/configure", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ googleClientId: gId })
-    });
-  } catch {}
-
-  document.getElementById("google-setup-modal")?.classList.remove("open");
-  toast("Google Client ID configured! Opening Google Accounts...", "success");
-  triggerGoogleGsiOrOAuth();
-});
-
-document.getElementById("btn-quick-dev-login")?.addEventListener("click", async () => {
-  const devUser = {
-    id: 1,
-    email: "b23cs1038@iitj.ac.in",
-    name: "Mohit",
-    role: "admin",
-    provider: "google",
-    avatar_url: "https://ui-avatars.com/api/?name=Mohit&background=E8524A&color=fff"
-  };
-
-  try {
-    const res = await fetch((API || "") + "/api/auth/oauth/continue", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        provider: "google",
-        email: devUser.email,
-        name: devUser.name,
-        avatar_url: devUser.avatar_url
-      })
-    });
-    const data = await res.json();
-    if (data.success) {
-      document.getElementById("google-setup-modal")?.classList.remove("open");
-      setSession(data.token, data.user);
-      toast("Signed in as Mohit (b23cs1038@iitj.ac.in) 🚀", "success");
-      loadOverview();
-      return;
-    }
-  } catch (err) {
-    console.warn("Backend offline, signing in via local dev session:", err);
-  }
-
-  // Fallback dev login (ensures immediate access)
-  document.getElementById("google-setup-modal")?.classList.remove("open");
-  setSession("dev_token_" + Date.now(), devUser);
-  toast("Signed in as Mohit (b23cs1038@iitj.ac.in) 🚀", "success");
   loadOverview();
 });
 
