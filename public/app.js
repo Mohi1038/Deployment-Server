@@ -789,9 +789,12 @@ function updateAuthUI() {
   const btn = document.getElementById("auth-btn");
 
   if (currentUser && authToken) {
-    // Authenticated: show full dashboard, hide landing auth screen
+    // Authenticated: show full dashboard (CSS grid layout), hide landing auth screen
     if (landingView) landingView.style.display = "none";
-    if (dashShell) dashShell.style.display = "flex";
+    if (dashShell) {
+      dashShell.classList.remove("hidden");
+      dashShell.style.display = ""; // Preserve CSS Grid from .app-shell
+    }
 
     if (btn) {
       const avatar = currentUser.avatar_url 
@@ -805,7 +808,10 @@ function updateAuthUI() {
   } else {
     // Unauthenticated: gate the app completely with ChatGPT landing auth screen
     if (landingView) landingView.style.display = "flex";
-    if (dashShell) dashShell.style.display = "none";
+    if (dashShell) {
+      dashShell.classList.add("hidden");
+      dashShell.style.display = "none";
+    }
     if (btn) {
       btn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> <span id="auth-user-label">Sign In</span>`;
     }
