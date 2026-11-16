@@ -133,7 +133,7 @@ export default (app) => {
           repo_url: repository.html_url,
           repo_type: repository.private ? "private" : "public",
           cloud_provider: provider,
-          simulate: true
+          simulate: false
         })
       });
 
@@ -142,20 +142,23 @@ export default (app) => {
 
       const depId = depData.id;
 
-      // Poll until ready (up to 60s)
+      // Real cloud provisioning and startup scripts can take several minutes.
       let liveUrl = null;
       let finalIp = null;
-      for (let i = 0; i < 12; i++) {
-        await new Promise(r => setTimeout(r, 4000));
+      for (let i = 0; i < 60; i++) {
+        await new Promise(r => setTimeout(r, 10000));
         const checkRes = await fetch(`${API_BASE_URL}/api/deployments/${depId}`);
         const checkData = await checkRes.json();
         const dep = checkData.deployment;
 
         if (dep?.status === "ready") {
           finalIp = dep.vm_ip;
-          liveUrl = dep.domain && dep.domain !== "_" ? `http://${dep.domain}` : `http://${dep.vm_ip}`;
+          liveUrl = dep.domain && dep.domain !== "_"
+            ? `${dep.ssl_enabled ? "https" : "http"}://${dep.domain}`
+            : `http://${dep.vm_ip}`;
           break;
         }
+        if (dep?.status === "failed") throw new Error(dep.error_message || "Deployment failed");
       }
 
       const finalUrl = liveUrl || `http://${finalIp || "pending"}`;

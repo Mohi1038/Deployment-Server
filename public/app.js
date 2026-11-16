@@ -83,6 +83,8 @@ function statusBadge(status) {
     pending:    'badge-pending',
     deploying:  'badge-deploying',
     provisioning: 'badge-deploying',
+    configuring: 'badge-deploying',
+    degraded:   'badge-failed',
     failed:     'badge-failed',
   };
   const cls = map[status] || 'badge-info';
@@ -120,10 +122,11 @@ function formatLog(raw) {
 }
 
 async function apiFetch(path, opts = {}) {
-  const r = await fetch(API + path, {
-    headers: { 'Content-Type': 'application/json', ...opts.headers },
-    ...opts,
-  });
+  const headers = { 'Content-Type': 'application/json', ...opts.headers };
+  if (authToken && !headers.Authorization) {
+    headers.Authorization = `Bearer ${authToken}`;
+  }
+  const r = await fetch(API + path, { ...opts, headers, credentials: 'include' });
   return r.json();
 }
 
@@ -218,7 +221,7 @@ async function loadInstances() {
           <div class="repo-url">${escHtml(d.git_username)}</div>
         </td>
         <td><code>${escHtml(d.branch || 'main')}</code></td>
-        <td>${d.domain && d.domain !== '_' ? `<a href="http://${d.domain}" target="_blank" style="color:var(--accent);text-decoration:none;font-family:monospace;font-size:12px">${d.domain}</a>` : (d.vm_ip ? `<a href="http://${d.vm_ip}" target="_blank" style="color:var(--accent);text-decoration:none;font-family:monospace;font-size:12px">${d.vm_ip}</a>` : '<span class="text-muted">—</span>')}</td>
+        <td>${d.domain && d.domain !== '_' ? `<a href="${d.ssl_enabled ? 'https' : 'http'}://${d.domain}" target="_blank" style="color:var(--accent);text-decoration:none;font-family:monospace;font-size:12px">${d.ssl_enabled ? '🔒 ' : ''}${d.domain}</a>` : (d.vm_ip ? `<a href="http://${d.vm_ip}" target="_blank" style="color:var(--accent);text-decoration:none;font-family:monospace;font-size:12px">${d.vm_ip}</a>` : '<span class="text-muted">—</span>')}</td>
         <td><span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;padding:2px 8px;background:${slotColor}18;color:${slotColor};border-radius:999px;border:1px solid ${slotColor}44">
           <span style="width:6px;height:6px;border-radius:50%;background:${slotColor}"></span>${slotLabel}
         </span></td>
@@ -240,6 +243,9 @@ async function loadInstances() {
             <button class="btn btn-ghost btn-sm" title="Real-time SSE Logs" onclick="openLogModal(${d.id}, '${escHtml(d.repo_name)}')">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
             </button>
+            ${d.status === 'ready' && !Number(d.ssl_enabled) && d.vm_ip ? `
+            <button class="btn btn-outline btn-sm" style="color:#2563eb;border-color:#93c5fd;white-space:nowrap" title="Enable HTTPS with Let's Encrypt" onclick="enableDeploymentSsl(${d.id})">🔒 HTTPS</button>
+            ` : ''}
             <button class="btn btn-danger btn-sm" title="Delete" onclick="deleteDeployment(${d.id})">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
             </button>
@@ -267,6 +273,24 @@ window.triggerFastUpdate = async function(id) {
     }
   } catch {
     toast('Update request failed.', 'error');
+  }
+};
+
+window.enableDeploymentSsl = async function (id) {
+  const email = window.prompt("Enter an email for Let's Encrypt certificate renewal notices:");
+  if (!email) return;
+  try {
+    toast('Installing Certbot and requesting the HTTPS certificate...', 'info', 6000);
+    const res = await apiFetch(`/api/deployments/${id}/ssl`, {
+      method: 'POST',
+      body: JSON.stringify({ email })
+    });
+    if (!res.success) throw new Error(res.error || 'SSL setup failed.');
+    toast(`HTTPS enabled: ${res.url}`, 'success', 10000);
+    loadInstances();
+    loadOverview();
+  } catch (err) {
+    toast(`HTTPS setup failed: ${err.message}`, 'error', 10000);
   }
 };
 
@@ -683,6 +707,11 @@ document.getElementById('clear-form-btn').addEventListener('click', () => {
   document.getElementById('deploy-form').reset();
 });
 
+document.getElementById('ssl-enabled')?.addEventListener('change', function () {
+  const email = document.getElementById('ssl-email');
+  if (email) email.required = this.checked;
+});
+
 document.getElementById('deploy-form').addEventListener('submit', async function(e) {
   e.preventDefault();
   const btn = document.getElementById('deploy-submit-btn');
@@ -829,6 +858,8 @@ function setSession(token, user) {
 function showProbotConnectModal(username) {
   const uSpan = document.getElementById("probot-github-username");
   if (uSpan) uSpan.textContent = username;
+  const installLink = document.getElementById("btn-install-probot-app");
+  if (installLink) installLink.href = `${API}/api/github/app/setup`;
   document.getElementById("probot-connect-modal")?.classList.add("open");
 }
 
@@ -848,8 +879,7 @@ window.addEventListener("message", (event) => {
     document.getElementById("google-setup-modal")?.classList.remove("open");
 
     if (data.provider === "github") {
-      // Requirement 3: Prompt Probot app attachment for GitHub user!
-      showProbotConnectModal(data.user.name || data.user.email);
+      showProbotConnectModal(data.user.login || data.user.name || data.user.email);
     } else {
       toast(`Authenticated with ${data.provider === "google" ? "Google" : "GitHub"}! Welcome, ${data.user.name || data.user.email} 🚀`, "success");
       loadOverview();
@@ -1038,10 +1068,7 @@ document.getElementById('new-workspace-modal').addEventListener('click', e => {
   } catch {}
 })();
 
-// Auto-login if token is stored
-if (authToken && currentUser) {
-  updateAuthUI();
-}
+// Session is confirmed in restoreSession() before the dashboard is shown.
 
 // ══════════════════════════════════════════════════════
 // GCP CLOUD MONITORING & LIVE OBSERVABILITY ENGINE
@@ -1681,11 +1708,41 @@ document.getElementById('btn-save-backend')?.addEventListener('click', () => {
 // ══════════════════════════════════════════════════════
 // BOOTSTRAP
 // ══════════════════════════════════════════════════════
+// Restore the cached shell immediately, then validate the token in the
+// background. A temporary API outage must not sign the user out.
 updateAuthUI();
+
+async function restoreSession() {
+  if (!authToken) {
+    currentUser = null;
+    updateAuthUI();
+    return;
+  }
+  try {
+    const r = await apiFetch('/api/auth/me');
+    if (r?.success && r.user) {
+      currentUser = { ...(currentUser || {}), ...r.user };
+      localStorage.setItem('devlups_user', JSON.stringify(currentUser));
+      updateAuthUI();
+      loadOverview();
+      return;
+    }
+    if (r?.error === 'Unauthenticated') {
+      authToken = null;
+      currentUser = null;
+      localStorage.removeItem('devlups_token');
+      localStorage.removeItem('devlups_user');
+      updateAuthUI();
+    }
+  } catch (err) {
+    console.warn('Session validation unavailable; keeping cached session.', err);
+    loadOverview();
+  }
+}
+
 checkBackendHealth();
 setInterval(checkBackendHealth, 15000);
-
-loadOverview();
+restoreSession();
 
 
 // ══════════════════════════════════════════════════════

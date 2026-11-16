@@ -58,6 +58,8 @@ function initDatabase() {
         backend_route TEXT DEFAULT '/api',
         backend_port INTEGER DEFAULT 5000,
         domain TEXT DEFAULT '_',
+        ssl_enabled INTEGER DEFAULT 0,
+        ssl_email TEXT,
         gcp_credential_id INTEGER,
         machine_type TEXT DEFAULT 'e2-micro',
         vm_name TEXT,
@@ -113,6 +115,8 @@ function initDatabase() {
     try { dbInstance.exec(`ALTER TABLE deployments ADD COLUMN database_addon TEXT DEFAULT 'none'`); } catch {}
     try { dbInstance.exec(`ALTER TABLE deployments ADD COLUMN workspace_id INTEGER DEFAULT 1`); } catch {}
     try { dbInstance.exec(`ALTER TABLE deployments ADD COLUMN active_slot TEXT DEFAULT 'blue'`); } catch {}
+    try { dbInstance.exec(`ALTER TABLE deployments ADD COLUMN ssl_enabled INTEGER DEFAULT 0`); } catch {}
+    try { dbInstance.exec(`ALTER TABLE deployments ADD COLUMN ssl_email TEXT`); } catch {}
     try { dbInstance.exec(`ALTER TABLE users ADD COLUMN provider TEXT DEFAULT 'local'`); } catch {}
     try { dbInstance.exec(`ALTER TABLE users ADD COLUMN avatar_url TEXT DEFAULT ''`); } catch {}
 
@@ -252,8 +256,8 @@ export const db = {
         frontend_present, frontend_route, frontend_port,
         backend_present, backend_route, backend_port,
         domain, gcp_credential_id, machine_type, vm_name, vm_zone,
-        env_vars, database_addon, workspace_id, active_slot, status, logs, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        ssl_enabled, ssl_email, env_vars, database_addon, workspace_id, active_slot, status, logs, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
     `);
 
     const res = stmt.run(
@@ -274,6 +278,8 @@ export const db = {
       data.machine_type || 'e2-micro',
       data.vm_name || `devlups-vm-${Date.now().toString().slice(-6)}`,
       data.vm_zone || 'us-central1-a',
+      data.ssl_enabled ? 1 : 0,
+      data.ssl_email || null,
       encryptedEnv,
       data.database_addon || 'none',
       data.workspace_id || 1,
@@ -296,6 +302,18 @@ export const db = {
     if (extra.vm_name !== undefined) {
       fields.push('vm_name = ?');
       params.push(extra.vm_name);
+    }
+    if (extra.domain !== undefined) {
+      fields.push('domain = ?');
+      params.push(sanitizerService.sanitize(extra.domain));
+    }
+    if (extra.ssl_enabled !== undefined) {
+      fields.push('ssl_enabled = ?');
+      params.push(extra.ssl_enabled ? 1 : 0);
+    }
+    if (extra.ssl_email !== undefined) {
+      fields.push('ssl_email = ?');
+      params.push(sanitizerService.sanitize(extra.ssl_email));
     }
     if (extra.active_slot !== undefined) {
       fields.push('active_slot = ?');

@@ -37,20 +37,36 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+function setSessionCookie(res, token) {
+  const isCrossOrigin = Boolean(process.env.FRONTEND_ORIGINS);
+  const secure = isCrossOrigin || process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  const sameSite = isCrossOrigin ? 'None' : 'Lax';
+  res.setHeader('Set-Cookie', `deployment_session=${encodeURIComponent(token)}; Path=/; Max-Age=604800; HttpOnly; SameSite=${sameSite}${secure}`);
+}
+
 // Multer for JSON credential uploads
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 }
 });
 
-app.use(cors());
+const allowedOrigins = (process.env.FRONTEND_ORIGINS || '')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean);
+app.use(cors({
+  origin: allowedOrigins.length ? allowedOrigins : true,
+  credentials: true
+}));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // Auth & Multi-Tenant Workspace Middleware
 app.use((req, res, next) => {
   const authHeader = req.headers.authorization;
-  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  const headerToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  const cookieToken = authService.getCookie(req, 'deployment_session');
+  const token = headerToken || cookieToken;
   if (token) {
     const user = authService.verifyToken(token);
     if (user) req.user = user;
@@ -77,6 +93,7 @@ app.post('/api/auth/register', (req, res) => {
     const passwordHash = authService.hashPassword(password);
     const user = db.createUser({ email, password_hash: passwordHash, name: name || email.split('@')[0], role: 'developer' });
     const token = authService.createToken({ id: user.id, email: user.email, role: user.role, name: user.name });
+    setSessionCookie(res, token);
     res.json({ success: true, token, user });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -92,6 +109,7 @@ app.post('/api/auth/login', (req, res) => {
       return res.status(401).json({ success: false, error: 'Invalid email or password' });
     }
     const token = authService.createToken({ id: user.id, email: user.email, role: user.role, name: user.name });
+    setSessionCookie(res, token);
     res.json({ success: true, token, user: { id: user.id, email: user.email, name: user.name, role: user.role } });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -313,6 +331,7 @@ app.get('/api/auth/google/callback', async (req, res) => {
       avatar_url: user.avatar_url
     });
 
+    setSessionCookie(res, token);
     res.send(authService.renderOAuthCallbackHtml({
       success: true,
       provider: 'google',
@@ -433,11 +452,13 @@ app.get('/api/auth/github/callback', async (req, res) => {
       avatar_url: user.avatar_url
     });
 
+    setSessionCookie(res, token);
+    const sessionUser = { ...user, login: profile.login };
     res.send(authService.renderOAuthCallbackHtml({
       success: true,
       provider: 'github',
       token,
-      user
+      user: sessionUser
     }));
   } catch (err) {
     res.status(500).send(authService.renderOAuthCallbackHtml({
@@ -446,6 +467,37 @@ app.get('/api/auth/github/callback', async (req, res) => {
       error: err.message
     }));
   }
+});
+
+// Every user installs the same existing app. They do not create their own bot.
+app.get('/api/github/app/setup', (req, res) => {
+  const configuredUrl = (process.env.GITHUB_APP_URL || '').trim();
+  if (configuredUrl) {
+    try {
+      const appUrl = new URL(configuredUrl);
+      if (appUrl.hostname !== 'github.com' || !appUrl.pathname.startsWith('/apps/')) {
+        return res.status(500).json({
+          success: false,
+          error: 'GITHUB_APP_URL must be a GitHub App URL such as https://github.com/apps/deploybase/installations/new.'
+        });
+      }
+      return res.redirect(appUrl.toString());
+    } catch {
+      return res.status(500).json({
+        success: false,
+        error: 'GITHUB_APP_URL is not a valid URL.'
+      });
+    }
+  }
+
+  const slug = (process.env.GITHUB_APP_SLUG || 'deploybase').trim();
+  if (!slug) {
+    return res.status(500).json({
+      success: false,
+      error: 'GitHub App is not configured. Set GITHUB_APP_SLUG or GITHUB_APP_URL.'
+    });
+  }
+  res.redirect(`https://github.com/apps/${encodeURIComponent(slug)}/installations/new`);
 });
 
 // Current user profile
@@ -676,6 +728,8 @@ app.post('/api/deployments', async (req, res) => {
       backend_route = '/api',
       backend_port = 5000,
       domain = '_',
+      ssl_enabled = false,
+      ssl_email = '',
       gcp_credential_id,
       machine_type = 'e2-micro',
       vm_zone = 'us-central1-a',
@@ -686,6 +740,17 @@ app.post('/api/deployments', async (req, res) => {
 
     if (!repo_name) {
       return res.status(400).json({ success: false, error: 'Repository name is required.' });
+    }
+    const sslEnabled = ssl_enabled === true || ssl_enabled === 'true' || ssl_enabled === 'yes' || ssl_enabled === 'on' || ssl_enabled === '1';
+    const isSimulation = simulate === true || simulate === 'true' || simulate === 'yes' || simulate === 'on' || simulate === '1';
+    if (sslEnabled && !String(ssl_email).trim()) {
+      return res.status(400).json({ success: false, error: 'An email address is required to issue and renew the HTTPS certificate.' });
+    }
+    if (sslEnabled && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(ssl_email).trim())) {
+      return res.status(400).json({ success: false, error: 'A valid certificate email address is required.' });
+    }
+    if (sslEnabled && domain && domain !== '_' && !/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i.test(String(domain).trim())) {
+      return res.status(400).json({ success: false, error: 'The SSL domain contains invalid characters.' });
     }
 
     // Resolve credential: if 'cheapest' requested or omitted, pick optimal verified credential
@@ -718,6 +783,8 @@ app.post('/api/deployments', async (req, res) => {
       backend_route,
       backend_port: Number(backend_port),
       domain,
+      ssl_enabled: sslEnabled,
+      ssl_email: String(ssl_email).trim(),
       gcp_credential_id: selectedCredId,
       machine_type,
       vm_name: `devlups-${repo_name.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${Date.now().toString().slice(-4)}`,
@@ -733,17 +800,22 @@ app.post('/api/deployments', async (req, res) => {
     const providerService = getProviderService(selectedCred?.cloud_provider || 'gcp');
 
     // Run provisioning asynchronously with health check probe afterwards
-    providerService.triggerDeployment(id, { simulate: Boolean(simulate) })
+    providerService.triggerDeployment(id, { simulate: isSimulation })
       .then(result => {
         if (result?.ip && result.ip !== 'Provisioned' && !result.ip.includes('unknown')) {
-          // Format sslip.io clean domain
-          const cleanDomain = `${repo_name.toLowerCase().replace(/[^a-z0-9-]/g, '')}.${result.ip}.sslip.io`;
-          db.updateDeploymentStatus(id, 'ready', {
+          const cleanDomain = domain && domain !== '_'
+            ? String(domain).trim().toLowerCase()
+            : `${repo_name.toLowerCase().replace(/[^a-z0-9-]/g, '')}.${result.ip}.sslip.io`;
+          db.updateDeploymentStatus(id, isSimulation ? 'ready' : 'configuring', {
             domain: cleanDomain,
-            logs: `\n[DNS Engine] Automated hostname configured: http://${cleanDomain}`
+            logs: `\n[DNS Engine] Hostname configured: ${sslEnabled ? 'https' : 'http'}://${cleanDomain}`
           });
           // Background health check
-          healthService.verifyDeploymentHealth(id, result.ip, Number(frontend_port || 80)).catch(console.error);
+          // Public traffic enters through NGINX on port 80/443; the app port is
+          // internal to the VM and must not be probed from the deployment server.
+          if (!isSimulation) {
+            healthService.verifyDeploymentHealth(id, result.ip, 80).catch(console.error);
+          }
         }
       })
       .catch(err => {
@@ -795,6 +867,31 @@ app.post('/api/deployments/:id/update', async (req, res) => {
         db.updateDeploymentStatus(id, 'ready', {
           active_slot: nextSlot,
           logs: `\n[HA Engine] Blue/Green deployment succeeded at ${new Date().toISOString()}. Active slot: ${nextSlot.toUpperCase()}`
+        });
+
+        app.post('/api/deployments/:id/ssl', async (req, res) => {
+          const id = Number(req.params.id);
+          const email = String(req.body?.email || '').trim();
+          if (!Number.isInteger(id) || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+            return res.status(400).json({ success: false, error: 'A valid certificate email is required.' });
+          }
+
+          try {
+            const deployment = db.getDeploymentById(id);
+            if (!deployment) return res.status(404).json({ success: false, error: 'Deployment not found.' });
+            if (deployment.cloud_provider !== 'gcp') {
+              return res.status(400).json({ success: false, error: 'Post-deployment SSL currently supports GCP deployments.' });
+            }
+            db.updateDeploymentStatus(id, 'configuring', {
+              logs: "\n[SSL] Installing Certbot and requesting a Let's Encrypt certificate from the VM..."
+            });
+            const result = await gcpService.enableSsl(id, email);
+            const database = db.getDeploymentById(id);
+            res.json({ success: true, deployment: database, url: `https://${result.domain}` });
+          } catch (err) {
+            db.updateDeploymentStatus(id, 'failed', { error_message: err.message, logs: `\n[SSL] Failed: ${err.message}` });
+            res.status(500).json({ success: false, error: err.message });
+          }
         });
       } catch (err) {
         db.appendDeploymentLog(id, `[HA Engine Error]: ${err.message}`);
@@ -1081,4 +1178,16 @@ server.on('error', (err) => {
   } else {
     console.error('Server error:', err);
   }
+});
+
+// Keep the dashboard synchronized with actual reachable services. Deployment
+// records are not treated as proof that a cloud VM still exists.
+const healthMonitor = setInterval(() => {
+  healthService.pruneUnreachableDeployments().catch(err => {
+    console.error('[Health Monitor] Reconciliation failed:', err.message);
+  });
+}, 60000);
+healthMonitor.unref();
+healthService.pruneUnreachableDeployments().catch(err => {
+  console.error('[Health Monitor] Initial reconciliation failed:', err.message);
 });

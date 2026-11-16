@@ -112,6 +112,7 @@ export const awsService = {
       repo_name, git_username, repo_url, repo_type, pat_token,
       frontend_present, frontend_route, frontend_port,
       backend_present, backend_route, backend_port,
+      domain, ssl_enabled, ssl_email,
     } = deployment;
     const fPort = Number(frontend_port) || 3000;
     const bPort = Number(backend_port) || 5000;
@@ -245,6 +246,16 @@ STATIC_CONF
 fi
 
 PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || echo "unknown")
+if [ "${ssl_enabled ? 'true' : 'false'}" = "true" ]; then
+    SSL_DOMAIN="${domain && domain !== '_' ? domain : ''}"
+    [ -z "$SSL_DOMAIN" ] && SSL_DOMAIN="${repo_name.toLowerCase().replace(/[^a-z0-9-]/g, '')}.$PUBLIC_IP.sslip.io"
+    apt-get install -y certbot python3-certbot-nginx
+    sed -i "s/server_name _;/server_name $SSL_DOMAIN;/g" "$CONF_PATH"
+    nginx -t && systemctl reload nginx
+    certbot --nginx --non-interactive --agree-tos --email "${ssl_email || ''}" --redirect -d "$SSL_DOMAIN"
+    systemctl enable --now certbot.timer
+    echo "[SSL] HTTPS enabled at https://$SSL_DOMAIN"
+fi
 echo "[AWS Engine] Deployment complete! App running at http://$PUBLIC_IP"
 `;
   },

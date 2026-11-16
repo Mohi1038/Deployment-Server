@@ -20,8 +20,8 @@ if [ ! -d "/etc/nginx/conf.d" ]; then
 fi
 
 # Check if enough arguments are passed
-if [ "$#" -ne 8 ]; then
-    echo "Usage: $0 <file-name> <ip/domain> <frontend: yes/no> <frontend-route> <frontend-port> <backend: yes/no> <backend-route> <backend-port>"
+if [ "$#" -ne 8 ] && [ "$#" -ne 10 ]; then
+    echo "Usage: $0 <file-name> <ip/domain> <frontend: yes/no> <frontend-route> <frontend-port> <backend: yes/no> <backend-route> <backend-port> <ssl-email> <ssl-enabled: yes/no>"
     exit 1
 fi
 
@@ -34,6 +34,8 @@ FRONTEND_PORT=$5
 BACKEND_PRESENT=$6
 BACKEND_ROUTE=$7
 BACKEND_PORT=$8
+SSL_EMAIL=${9:-}
+SSL_ENABLED=${10:-no}
 
 CONF_PATH="/etc/nginx/conf.d/$FILE_NAME.conf"
 
@@ -103,6 +105,16 @@ EOF
 # Config test and reload
 nginx -t || { echo "Error: Invalid Nginx configuration"; exit 1; }
 systemctl reload nginx || { echo "Error: Nginx reload failed"; exit 1; }
+
+if [ "$SSL_ENABLED" = "yes" ]; then
+  if [ "$DOMAIN" = "_" ] || [ -z "$SSL_EMAIL" ]; then
+    echo "Error: SSL requires a real domain and certificate email."
+    exit 1
+  fi
+  apt-get install -y certbot python3-certbot-nginx
+  certbot --nginx --non-interactive --agree-tos --email "$SSL_EMAIL" --redirect -d "$DOMAIN"
+  systemctl enable certbot.timer
+fi
 
 echo "Success: Nginx configuration applied"
 echo "Config: $CONF_PATH"

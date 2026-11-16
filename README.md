@@ -14,6 +14,7 @@
 - **Secure Credential Handling**: All sensitive credentials are stored and retrieved from AWS S3, never exposed in code or logs.
 - **Custom VM Configuration**: Users can specify custom ports and configurations for their VMs.
 - **Automated Server Setup**: Bash scripts handle NGINX, Docker, and application setup with best-practice security.
+- **HTTPS Integration**: Certbot obtains Let's Encrypt certificates, redirects HTTP to HTTPS, and renews certificates automatically.
 - **Collaborative & Auditable**: All actions are triggered via GitHub issues and pull requests, ensuring traceability and peer review.
 
 ---
@@ -53,6 +54,12 @@
 
 - All deployment actions are logged and auditable via GitHub issues and pull requests.
 - Team members can review, approve, or trigger redeployments as needed.
+
+### 7. SSL / HTTPS Integration
+
+Enable **HTTPS / SSL** in the deployment form and provide a certificate email address. For a custom domain, point its DNS A record to the VM before certificate issuance. If no custom domain is supplied, the platform creates an `sslip.io` hostname from the VM's public IP.
+
+The VM startup process installs Certbot, configures NGINX for the selected hostname, obtains a Let's Encrypt certificate, redirects HTTP traffic to HTTPS, and enables the system renewal timer. Ports 80 and 443 must be reachable from the internet for certificate issuance.
 
 ---
 

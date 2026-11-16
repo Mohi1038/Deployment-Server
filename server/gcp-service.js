@@ -1,4 +1,4 @@
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -9,7 +9,105 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const TERRAFORM_DIR = path.resolve(__dirname, '../gcp-auth');
 
+function streamVmDeploymentLog(deploymentId, vmName, projectId, zone, log) {
+  const command = 'sudo tail -n 200 -F /var/log/devlups-deployment.log';
+  const ssh = spawn('gcloud', [
+    'compute', 'ssh', vmName,
+    '--project', projectId,
+    '--zone', zone,
+    '--quiet',
+    '--command', command
+  ], { stdio: ['ignore', 'pipe', 'pipe'] });
+
+  let stdoutBuffer = '';
+  let stderrBuffer = '';
+  let finished = false;
+  let timeout;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(timeout);
+    if (!ssh.killed) ssh.kill('SIGTERM');
+  };
+  const appendLines = (chunk, source) => {
+    const buffer = source === 'stderr' ? stderrBuffer : stdoutBuffer;
+    const text = buffer + chunk;
+    const lines = text.split('\n');
+    if (source === 'stderr') stderrBuffer = lines.pop() || '';
+    else stdoutBuffer = lines.pop() || '';
+    for (const line of lines) {
+      if (line.trim()) log(source === 'stderr' ? `[VM SSH] ${line}` : line);
+      if (line.includes('Universal Cloud Deployment Completed Successfully')) finish();
+    }
+  };
+
+  ssh.stdout.on('data', chunk => appendLines(chunk.toString(), 'stdout'));
+  ssh.stderr.on('data', chunk => appendLines(chunk.toString(), 'stderr'));
+  ssh.on('error', err => {
+    log(`[VM Log Stream] Could not connect to ${vmName}: ${err.message}`);
+    finish();
+  });
+  ssh.on('close', (code, signal) => {
+    if (!finished && code !== 0) {
+      log(`[VM Log Stream] SSH stream ended (code=${code ?? 'none'}, signal=${signal ?? 'none'}).`);
+    }
+    finish();
+  });
+
+  timeout = setTimeout(() => {
+    log('[VM Log Stream] Stream timeout reached after 15 minutes.');
+    finish();
+  }, 15 * 60 * 1000);
+
+  return ssh;
+}
+
 export const gcpService = {
+  async enableSsl(deploymentId, email) {
+    const deployment = db.getDeploymentById(deploymentId);
+    if (!deployment?.vm_name || !deployment.vm_ip) throw new Error('Deployment VM is not available yet.');
+    const credential = db.getCredentialById(deployment.gcp_credential_id);
+    if (!credential?.project_id) throw new Error('The deployment GCP credential is unavailable.');
+
+    const domain = deployment.domain && deployment.domain !== '_'
+      ? deployment.domain
+      : `${deployment.repo_name.toLowerCase().replace(/[^a-z0-9-]/g, '')}.${deployment.vm_ip}.sslip.io`;
+    const zone = credential.zone || `${credential.region || 'asia-south2'}-a`;
+    const shellQuote = value => `'${String(value).replace(/'/g, "'\\''")}'`;
+    const script = [
+      'set -e',
+      'export DEBIAN_FRONTEND=noninteractive',
+      'sudo apt-get update -y',
+      'sudo apt-get install -y certbot python3-certbot-nginx',
+      `sudo sed -i ${shellQuote(`s/server_name _;/server_name ${domain};/g`)} /etc/nginx/conf.d/*.conf`,
+      'sudo nginx -t',
+      'sudo systemctl reload nginx',
+      `sudo certbot --nginx --non-interactive --agree-tos --email ${shellQuote(email)} --redirect -d ${shellQuote(domain)}`,
+      'sudo systemctl enable certbot.timer',
+      'sudo systemctl start certbot.timer',
+      `printf '%s\\n' ${shellQuote(`[SSL] HTTPS enabled at https://${domain}`)}`
+    ].join(' && ');
+
+    await new Promise((resolve, reject) => {
+      exec(
+        `gcloud compute ssh ${shellQuote(deployment.vm_name)} --project=${shellQuote(credential.project_id)} --zone=${shellQuote(zone)} --quiet --command=${shellQuote(script)}`,
+        { timeout: 240000 },
+        (error, stdout, stderr) => {
+          if (error) return reject(new Error(stderr || stdout || error.message));
+          resolve();
+        }
+      );
+    });
+
+    db.updateDeploymentStatus(deploymentId, 'ready', {
+      domain,
+      ssl_enabled: true,
+      ssl_email: email,
+      logs: `\n[SSL] Let's Encrypt certificate issued successfully.\n[SSL] HTTPS enabled at https://${domain}`,
+    });
+    return { domain };
+  },
+
   /**
    * Verify GCP credentials via Terraform or JSON validation
    */
@@ -24,6 +122,12 @@ export const gcpService = {
     if (!credObj.project_id && !projectId) {
       throw new Error('Missing project_id in credentials.');
     }
+    if (credObj.web || credObj.installed || credObj.client_id && !credObj.private_key) {
+      throw new Error('This is a Google OAuth client JSON, not a GCP service-account key. Create a Service Account in Google Cloud IAM, download its JSON key, and upload that file.');
+    }
+    if (credObj.type !== 'service_account' || !credObj.client_email || !credObj.private_key) {
+      throw new Error('Invalid GCP credentials. Upload the JSON key for a service account with type "service_account", client_email, and private_key.');
+    }
 
     const actualProjectId = projectId || credObj.project_id;
     const isDemo = credObj.demo_placeholder || actualProjectId.includes('demo') || actualProjectId.includes('sandbox');
@@ -35,6 +139,50 @@ export const gcpService = {
         projectId: actualProjectId,
         message: `Verified (Sandbox Mode)! Connected to GCP Project: ${actualProjectId} with 50-dollar tier credits.`
       };
+    }
+
+    // Prefer the Google Cloud CLI for credential verification when available.
+    // This avoids relying on an outdated Terraform provider just to authenticate.
+    const gcloudVarFile = path.resolve(TERRAFORM_DIR, `temp_gcloud_verify_${Date.now()}.json`);
+    try {
+      fs.writeFileSync(gcloudVarFile, JSON.stringify(credObj), { mode: 0o600 });
+      await new Promise((resolve, reject) => {
+        exec(
+          `gcloud projects describe "${actualProjectId}" --format=json`,
+          {
+            timeout: 60000,
+            env: {
+              ...process.env,
+              CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE: gcloudVarFile,
+              CLOUDSDK_CORE_DISABLE_PROMPTS: '1'
+            }
+          },
+          (error, stdout, stderr) => {
+            if (error) return reject(new Error(stderr || error.message));
+            try {
+              const project = JSON.parse(stdout);
+              resolve(project);
+            } catch {
+              reject(new Error('Google Cloud CLI returned an invalid project response.'));
+            }
+          }
+        );
+      });
+
+      return {
+        success: true,
+        projectId: actualProjectId,
+        projectNumber: 'Verified',
+        message: `GCP credentials verified successfully for project ${actualProjectId}.`
+      };
+    } catch (err) {
+      if (!/command not found|not found|ENOENT/i.test(err.message)) {
+        throw new Error(`GCP Verification Failed: ${err.message}`);
+      }
+    } finally {
+      if (fs.existsSync(gcloudVarFile)) {
+        try { fs.unlinkSync(gcloudVarFile); } catch {}
+      }
     }
 
     // Live verification using Terraform var-file (safe from shell escaping)
@@ -101,11 +249,15 @@ export const gcpService = {
       backend_present,
       backend_route,
       backend_port,
-      domain
+      domain,
+      ssl_enabled,
+      ssl_email
     } = deployment;
 
     const fPort = Number(frontend_port) || 3000;
     const bPort = Number(backend_port) || 5000;
+    const sslDomain = domain && domain !== '_' ? String(domain).trim() : '';
+    const sslDomainPrefix = repo_name.toLowerCase().replace(/[^a-z0-9-]/g, '');
 
     return `#!/bin/bash
 set -e
@@ -383,6 +535,38 @@ NGINX_FALLBACK
     nginx -t && systemctl reload nginx
 fi
 
+# =========================================================
+# HTTPS / SSL INTEGRATION (Let's Encrypt + automatic renewal)
+# =========================================================
+if [ "${ssl_enabled ? 'true' : 'false'}" = "true" ]; then
+    CERT_EMAIL="${ssl_email || ''}"
+    if [ -z "$CERT_EMAIL" ]; then
+        echo "[SSL] Certificate email is required."
+        exit 1
+    fi
+
+    apt-get install -y certbot python3-certbot-nginx
+    PUBLIC_IP=$(curl -fsS --max-time 10 http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip -H "Metadata-Flavor: Google" || true)
+    SSL_DOMAIN="${sslDomain}"
+    if [ -z "$SSL_DOMAIN" ]; then
+        SSL_DOMAIN="${sslDomainPrefix}.$PUBLIC_IP.sslip.io"
+    fi
+
+    if [ -z "$PUBLIC_IP" ] && [ "${domain || '_'}" = "_" ]; then
+        echo "[SSL] Unable to determine the VM public IP for the automatic hostname."
+        exit 1
+    fi
+    sed -i "s/server_name _;/server_name $SSL_DOMAIN;/g" "$CONF_PATH"
+
+    nginx -t && systemctl reload nginx
+    certbot --nginx --non-interactive --agree-tos --email "$CERT_EMAIL" --redirect -d "$SSL_DOMAIN"
+    systemctl enable certbot.timer
+    systemctl start certbot.timer
+    echo "[SSL] HTTPS enabled at https://$SSL_DOMAIN"
+else
+    echo "[SSL] HTTPS is disabled for this deployment."
+fi
+
 echo "==========================================================="
 echo " Universal Cloud Deployment Completed Successfully"
 echo "==========================================================="
@@ -498,8 +682,10 @@ echo "==========================================================="
 
       log(`Phase 3/4: Compute Engine VM provisioned on GCP! External IP: ${allocatedIp}`);
       log(`Phase 4/4: Universal startup script is detecting stack, configuring NGINX and services.`);
+      log(`[VM Log Stream] Following ${vmName} startup output...`);
+      streamVmDeploymentLog(deploymentId, vmName, cred.project_id, zone, log);
       
-      db.updateDeploymentStatus(deploymentId, 'ready', {
+      db.updateDeploymentStatus(deploymentId, 'configuring', {
         vm_ip: allocatedIp,
         vm_name: vmName,
         logs: `GCP Provisioning Successful. VM is live at: http://${allocatedIp}`
