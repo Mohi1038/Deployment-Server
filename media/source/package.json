@@ -1,0 +1,6 @@
+{
+  "name": "deployment-server-gifs",
+  "private": true,
+  "scripts": { "render": "node render.js all" },
+  "dependencies": { "sharp": "^0.35.5" }
+}
