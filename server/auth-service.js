@@ -5,7 +5,13 @@
 
 import crypto from 'crypto';
 
-const JWT_SECRET = process.env.JWT_SECRET || process.env.ENCRYPTION_MASTER_KEY || 'devlups-super-secure-jwt-secret-key-32b';
+import { cryptoService } from './crypto-service.js';
+
+// Resolved on first use, after .env is loaded. Falls back to the AES master
+// key (generated and persisted on first start), never to a constant.
+function jwtSecret() {
+  return process.env.JWT_SECRET || cryptoService.getMasterKeyHex();
+}
 
 export const authService = {
   /**
@@ -23,6 +29,7 @@ export const authService = {
   verifyPassword(password, stored) {
     if (!stored || !stored.includes(':')) return false;
     const [salt, hash] = stored.split(':');
+    if (!/^[0-9a-f]{64}$/i.test(hash || '') || typeof password !== 'string') return false; // e.g. OAuth-only accounts
     const verifyHash = crypto.pbkdf2Sync(password, salt, 50000, 32, 'sha256').toString('hex');
     return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(verifyHash, 'hex'));
   },
@@ -34,7 +41,7 @@ export const authService = {
     const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
     const exp = Math.floor(Date.now() / 1000) + expiresInSeconds;
     const data = Buffer.from(JSON.stringify({ ...payload, exp })).toString('base64url');
-    const signature = crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${data}`).digest('base64url');
+    const signature = crypto.createHmac('sha256', jwtSecret()).update(`${header}.${data}`).digest('base64url');
     return `${header}.${data}.${signature}`;
   },
 
@@ -46,7 +53,7 @@ export const authService = {
     const parts = token.split('.');
     if (parts.length !== 3) return null;
     const [header, data, signature] = parts;
-    const expectedSig = crypto.createHmac('sha256', JWT_SECRET).update(`${header}.${data}`).digest('base64url');
+    const expectedSig = crypto.createHmac('sha256', jwtSecret()).update(`${header}.${data}`).digest('base64url');
     
     if (signature.length !== expectedSig.length) return null;
     if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSig))) return null;

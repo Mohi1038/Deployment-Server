@@ -1,186 +1,141 @@
 # Deployment Server
 
-## Overview
+**From a GitHub issue to a live, health-checked app on a real cloud VM.**
 
-**Deployment Server** is an enterprise-grade automation platform for seamless virtual machine provisioning and application deployment on Google Cloud Platform (GCP) and Amazon Web Services (AWS). At its core is the **DeployBase** GitHub Probot App, which orchestrates secure, event-driven deployments directly from your GitHub workflow. The platform leverages Terraform for infrastructure-as-code, AWS S3 for secure credential management, and robust bash scripts for automated server setup, NGINX configuration, and application deployment.
+Comment `/deploy gcp` on an issue (or use the dashboard). Deployment Server then does the rest:
 
----
+1. provisions a VM on Google Cloud, AWS, Azure or DigitalOcean;
+2. detects how the repository should run;
+3. puts it behind NGINX, with optional Let's Encrypt HTTPS;
+4. streams the VM's build log to the dashboard live;
+5. posts the URL back to the issue once the public URL actually answers.
 
-## Key Features
+Pushing to the deployed branch (or commenting `/update`) ships the new commit with a zero-downtime blue/green switch.
 
-- **One-Click GitHub Integration**: Authenticate and trigger deployments by simply installing the DeployBase GitHub App.
-- **Event-Driven Automation**: DeployBase listens for issue events and repository installations to initiate secure, validated deployments.
-- **Cloud-Agnostic Provisioning**: Supports both GCP and AWS, with infrastructure managed via Terraform.
-- **Secure Credential Handling**: All sensitive credentials are stored and retrieved from AWS S3, never exposed in code or logs.
-- **Custom VM Configuration**: Users can specify custom ports and configurations for their VMs.
-- **Automated Server Setup**: Bash scripts handle NGINX, Docker, and application setup with best-practice security.
-- **HTTPS Integration**: Certbot obtains Let's Encrypt certificates, redirects HTTP to HTTPS, and renews certificates automatically.
-- **Collaborative & Auditable**: All actions are triggered via GitHub issues and pull requests, ensuring traceability and peer review.
+Author: **Mohit Meemrauth**
 
 ---
 
-## How It Works
+## How it works
 
-### 1. Install DeployBase GitHub App
+```
+GitHub issue / comment / push ──► DeployBase bot (Probot, first-app/)
+                                        │  REST + service token
+Web dashboard (public/) ──── REST ────► Deployment Server (Express, server/) ── SQLite (node:sqlite)
+          ▲                                │
+          └──── SSE live logs ─────────────┤ terraform apply / aws / az / DigitalOcean API
+                                           ▼
+                              Cloud VM (Ubuntu 22.04, generated startup script)
+                              NGINX :80/:443 ─► app (Docker slot blue|green, Compose, systemd, static)
+                              Certbot (optional) · operator user over SSH (per-deployment key)
+```
 
-- Visit the [DeployBase GitHub App page](#) and install it on your repository.
-- Grant the app permission to access issues and repository metadata.
+| Step | What happens | Status |
+|---|---|---|
+| Trigger | `/deploy [gcp\|aws\|azure\|digitalocean\|cheapest]`, or the dashboard form | `pending` |
+| Validate | Inputs validated (nothing user-supplied reaches a shell unchecked); credential chosen: explicit, by provider, or cheapest verified | `pending` |
+| Provision | GCP: Terraform in `data/terraform/dep-<id>` (own state per deployment). AWS / Azure: CLI. DigitalOcean: REST API | `verifying → provisioning` |
+| Boot | Startup script: operator SSH user, Docker + NGINX, clone the branch, `.env`, optional database container, stack detection | `configuring` |
+| Observe | The server tails `/var/log/devlups-deployment.log` over SSH and streams each sanitised line to the dashboard (SSE) | `configuring` |
+| Verify | Probes `http://<ip>` through NGINX every 10 s (up to 60 times). NGINX's default page counts as "not ready" | `ready` / `failed` |
+| Operate | Zero-downtime updates, live metrics, web terminal, HTTPS, teardown, all over SSH | `deploying`, `degraded`, `destroyed` |
 
-### 2. Trigger Deployment via GitHub Issue
+### Stack detection (most specific wins)
 
-- Create a new issue in your repository (e.g., "Deploy my app to GCP").
-- DeployBase will listen for the `issues.opened` event and begin the deployment workflow.
+| Found in the repo (depth ≤ 2) | How it runs | Updates |
+|---|---|---|
+| `docker-compose.yml` / `compose.yml` | `docker compose up -d --build` | rebuild + recreate |
+| `Dockerfile` | image `<repo>:<commit>`, container bound to `127.0.0.1`, port from `EXPOSE` | **blue/green**: new slot on the idle port, local health check, NGINX switch, old slot removed. A failed check keeps the old slot live |
+| `package.json` (Next.js) | `npm run build`, systemd `npm start -p <port>` | reinstall, rebuild, restart |
+| `package.json` (Vite) | `npm run build`, NGINX serves `dist/` | rebuild |
+| `package.json` (other) | systemd `npm start` | reinstall, rebuild, restart |
+| `requirements.txt` / `manage.py` / `main.py` / `app.py` | venv. Django `runserver`, FastAPI `uvicorn`, Flask `app.py`, under systemd | reinstall, restart |
+| `index.html` | NGINX static root | pull |
+| nothing runnable | placeholder page | pull |
 
-### 3. Authentication & Validation
+The startup script is idempotent: GCP re-runs startup scripts on every boot, and a re-run only makes sure the services are up.
 
-- DeployBase fetches your GitHub identity and validates your access.
-- It retrieves your GCP credentials (previously stored securely in AWS S3) and project configuration.
+## Security model
 
-### 4. Infrastructure Provisioning
+- **Sign-in:** every `/api` route requires a signed-in user. The exceptions are sign-in itself, `/api/health`, `/api/pricing` and the signed webhook.
+  - Passwords are hashed with PBKDF2-SHA256 (50,000 iterations). Sessions are HMAC-SHA256 tokens.
+  - Google sign-in tokens are verified with Google, and their audience is checked.
+- **Who can sign up:** only the first account (the owner) by default. Others need `ALLOWED_EMAILS` or `ALLOWED_EMAIL_DOMAINS`.
+- **GitHub bot:** authenticates with `DEPLOYMENT_API_TOKEN`. The webhook endpoint verifies `X-Hub-Signature-256`.
+- **Secrets at rest:** cloud credentials, GitHub tokens, env vars and per-deployment SSH private keys are encrypted with AES-256-GCM in SQLite.
+- **Secrets in transit:** credentials go to Terraform as `TF_VAR_credentials` (environment, not a file). SSH keys exist on disk only as a 0600 temp file for one call. Every log line passes through a sanitiser that masks tokens, keys and connection-string passwords.
+- **Least exposure on the VM:** app containers bind to `127.0.0.1`, so only NGINX is public. The clone's `.git/config` keeps no access token, because updates pass it per request.
+- **Web terminal:** runs on the deployment's own VM over SSH, with a 20 s timeout and a block-list for destructive commands.
 
-- Using Terraform, DeployBase validates your GCP account and provisions a VM with your specified configuration and ports.
-- All Terraform state and secrets are handled securely.
+## Getting started
 
-### 5. Automated Server & Application Setup
+### Prerequisites (on the Deployment Server host)
+- **Node.js ≥ 22.5** (built-in `node:sqlite`) and `ssh`.
+- **Cloud tools, one per provider you use:**
+  - Terraform ≥ 1.0 (GCP).
+  - Google Cloud CLI (optional; used for GCP credential verification and for VMs created before per-deployment keys).
+  - AWS CLI v2 (AWS).
+  - Azure CLI (Azure).
+  - DigitalOcean needs only the API token.
 
-- DeployBase securely SSHs into the new VM and executes a series of hardened bash scripts:
-  - **`deploy.sh`**: End-to-end automation for installing NGINX, Docker, Docker Compose, and cloning your repository. Handles both public and private repos, and ensures all dependencies are installed with proper permissions.
-  - **`nginx_file.sh`**: Dynamically generates and applies secure NGINX configurations based on your app's frontend/backend routes and ports. Enforces best practices (e.g., denying access to hidden files).
-  - **`nginx-clone.sh`**: Installs NGINX, clones your repository, and sets permissions to ensure NGINX can serve your app securely, even from protected directories.
-
-- All scripts are executed with strict error checking and privilege management to minimize risk.
-
-### 6. Continuous Collaboration
-
-- All deployment actions are logged and auditable via GitHub issues and pull requests.
-- Team members can review, approve, or trigger redeployments as needed.
-
-### 7. SSL / HTTPS Integration
-
-Enable **HTTPS / SSL** in the deployment form and provide a certificate email address. For a custom domain, point its DNS A record to the VM before certificate issuance. If no custom domain is supplied, the platform creates an `sslip.io` hostname from the VM's public IP.
-
-The VM startup process installs Certbot, configures NGINX for the selected hostname, obtains a Let's Encrypt certificate, redirects HTTP traffic to HTTPS, and enables the system renewal timer. Ports 80 and 443 must be reachable from the internet for certificate issuance.
-
----
-
-## Architecture
-
-![Deployment Architecture](architecture.png)
-
----
-
-## Technology Stack
-
-- **Languages**: JavaScript (Node.js), Bash
-- **Cloud Providers**: GCP, AWS
-- **Infrastructure**: Terraform
-- **Containerization**: Docker, Docker Compose
-- **Web Server**: NGINX
-- **Credential Storage**: AWS S3
-- **CI/CD & Automation**: DeployBase (Github Probot App)
-
----
-
-## Getting Started
-
-### Prerequisites
-
-- Node.js (>= 18)
-- Docker & Docker Compose
-- Terraform (>= 1.0)
-- AWS & GCP accounts with appropriate permissions
-- GitHub App credentials (for DeployBase
-
-
-### 1. Clone the Repository
-
+### Run the server and dashboard
 ```sh
-git clone <your-repo-url>
-cd Deployment-Server
+cp .env.example .env       # set DEPLOYMENT_API_TOKEN, GITHUB_WEBHOOK_SECRET, ALLOWED_EMAILS
+npm install
+npm start                  # http://localhost:3000
 ```
+Sign up (the first account becomes the owner), then add a credential under **Cloud Credentials** and verify it:
+- **GCP:** a service-account JSON key with Compute Admin permissions.
+- **AWS:** an access key.
+- **Azure:** a service principal.
+- **DigitalOcean:** an API token.
 
-### 2. Configure Environment Variables
+A GCP key whose project ID contains `sandbox` or `demo` runs **simulated** deployments (no VM). These are clearly labelled and useful for demos.
 
-Create a `.env` file in `first-app/` with:
-
-```
-AWS_ACCESS_KEY_ID=your-aws-access-key
-AWS_SECRET_ACCESS_KEY=your-aws-secret-key
-AWS_REGION=your-aws-region
-S3_BUCKET_NAME=your-s3-bucket
-API_URL=https://your-api-server
-```
-
-### 3. Install Dependencies & Run DeployBase
-
+### Run the GitHub bot
 ```sh
 cd first-app
-npm install
-npm start
+cp .env.example .env       # APP_ID, PRIVATE_KEY, WEBHOOK_SECRET, API_URL, DEPLOYMENT_API_TOKEN
+npm install && npm start
+npm test                   # command parsing + /status flow
+```
+Alternatively, point a plain repository webhook at `POST /api/webhook/github` with the same `GITHUB_WEBHOOK_SECRET`. That path deploys and updates, but it can't comment on issues.
+
+## API (main routes)
+
+| Method & path | Purpose |
+|---|---|
+| `POST /api/deployments` | create + start a deployment |
+| `GET /api/deployments[/:id]` | list / detail (secrets masked) |
+| `GET /api/deployments/:id/logs/stream` | live log (SSE; `?token=` for EventSource) |
+| `POST /api/deployments/:id/update` | zero-downtime update |
+| `POST /api/deployments/:id/ssl` | enable HTTPS on a running deployment |
+| `GET /api/deployments/:id/metrics` | live CPU / memory / disk / network from the VM |
+| `POST /api/deployments/:id/terminal/exec` | run a command on the VM |
+| `POST /api/deployments/:id/destroy` | tear down all cloud resources |
+| `DELETE /api/deployments/:id` | remove the record |
+| `POST /api/credentials`, `POST /api/credentials/:id/verify` | cloud credentials |
+| `POST /api/webhook/github` | signed GitHub webhook (`/deploy`, `/update`, push) |
+| `GET /api/health`, `GET /api/pricing` | public health check, list-price comparison |
+
+## Repository layout
+
+```
+server/            Express API, provider services, startup-script and update-script generators, SSH layer
+public/            dashboard (HTML/CSS/JS, deployable to Vercel)
+first-app/         DeployBase GitHub App (Probot)
+gcp-auth/main.tf   Terraform module (firewall + Compute Engine VM), copied per deployment
+data/              runtime state: SQLite DB, per-deployment Terraform dirs (git-ignored)
+deploy.sh, nginx-clone.sh, nginx_file.sh, keys.sh   original v1 setup scripts (kept for reference)
 ```
 
-### 4. Docker Deployment (Optional)
+## Known limitations
 
-```sh
-docker build -t deployment-server ./first-app
-docker run -e APP_ID=<app-id> -e PRIVATE_KEY=<pem-value> deployment-server
-```
-
-### 5. Infrastructure Provisioning with Terraform
-
-```sh
-cd gcp-auth
-terraform init
-terraform apply -auto-approve \
-  -var="credentials=$(cat <gcp-credentials-json>)" \
-  -var="region=<gcp-region>" \
-  -var="project_id=<gcp-project-id>"
-```
-
-### 6. Automated Server Setup
-
-Use the provided bash scripts for secure, automated setup:
-
-- **`deploy.sh`**: Installs NGINX, Docker, Docker Compose, and clones your repo. Handles both public/private repos and sets up the environment for your app.
-- **`nginx_file.sh`**: Generates and applies NGINX configs for custom frontend/backend routes and ports, with security best practices.
-- **`nginx-clone.sh`**: Installs NGINX, clones your repo, and configures permissions for secure serving.
-
----
-
-## Security Best Practices
-
-- **Credential Storage**: All sensitive keys are stored in AWS S3 and never hardcoded.
-- **SSH & NGINX**: Automated scripts enforce secure permissions and configurations.
-- **API Authentication**: All API endpoints require authentication and follow least-privilege principles.
-- **Code Reviews**: All changes are peer-reviewed via GitHub PRs.
-- **Script Hardening**: Bash scripts check for privilege escalation, validate inputs, and enforce secure defaults.
-
----
-
-## API & Configuration
-
-- **Project Settings**: Managed via RESTful APIs (see `first-app/index.js` for endpoints).
-- **GitHub App Events**: Handles `installation_repositories` and `issues.opened` for deployment triggers.
-- **Terraform Variables**: Credentials, region, and project ID are passed securely at runtime.
-
----
-
-## Contribution Guidelines
-
-We welcome contributions! Please read our [CONTRIBUTING.md](first-app/CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](first-app/CODE_OF_CONDUCT.md) before submitting pull requests.
-
----
+- **Deployment flow:** each deployment is an async task inside one Node process. There's no job queue yet.
+- **Ephemeral IPs:** VMs use ephemeral public IPs, so an `sslip.io` hostname changes if the VM is recreated.
+- **Pricing:** "cheapest" uses a static list-price table, not live pricing.
+- **Startup script contents:** the script (including a private-repo token and env vars) is visible in the VM's metadata / user-data, and in Terraform state on the server host.
 
 ## License
 
-This project is licensed under the [ISC License](first-app/LICENSE).
-
----
-
-## Acknowledgements
-
-- [Probot](https://probot.github.io/)
-- [Terraform](https://www.terraform.io/)
-- [AWS S3](https://aws.amazon.com/s3/)
-- [NGINX](https://nginx.org/)
-- [Docker](https://www.docker.com/)
+ISC

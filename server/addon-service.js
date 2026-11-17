@@ -118,39 +118,5 @@ ${cleaned}
 ENV_EOF
 chmod 600 "/opt/${repoName}/.env"
 `;
-  },
-
-  /**
-   * Telemetry / Real-time Resource Metrics for an instance
-   */
-  getTelemetry(deployment) {
-    const isReady = deployment.status === 'ready';
-    const baseCpu = isReady ? (Math.random() * 8 + 3).toFixed(1) : 0;
-    const baseRamMb = isReady ? Math.floor(Math.random() * 120 + 180) : 0;
-    const totalRamMb = deployment.machine_type === 'e2-medium' ? 4096 : (deployment.machine_type === 'e2-small' ? 2048 : 1024);
-
-    return {
-      deploymentId: deployment.id,
-      repoName: deployment.repo_name,
-      status: deployment.status,
-      ip: deployment.vm_ip || 'pending',
-      cpuPercent: Number(baseCpu),
-      memory: {
-        usedMb: baseRamMb,
-        totalMb: totalRamMb,
-        percent: Number(((baseRamMb / totalRamMb) * 100).toFixed(1))
-      },
-      disk: {
-        usedGb: 4.8,
-        totalGb: 20.0,
-        percent: 24.0
-      },
-      network: {
-        rxMb: (Math.random() * 5 + 12).toFixed(1),
-        txMb: (Math.random() * 8 + 25).toFixed(1)
-      },
-      uptimeSeconds: process.uptime()
-    };
   }
 };
-

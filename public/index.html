@@ -104,7 +104,7 @@
 
       <span class="status-pill" id="sys-status-pill">
         <span class="status-dot"></span>
-        HA Cluster Active
+        Health Monitor On
       </span>
     </div>
   </header>
@@ -1049,7 +1049,7 @@
               </li>
               <li style="font-size:13px;color:var(--text-2);display:flex;align-items:center;gap:8px">
                 <span class="badge badge-ready" style="font-size:10px">Active</span>
-                <strong>push</strong> &mdash; Auto-reloads code in-place on git push in 4 seconds (zero downtime)
+                <strong>push</strong> &mdash; Pulls the new commit on the existing VM. Docker apps switch blue/green only after the new version passes a health check
               </li>
               <li style="font-size:13px;color:var(--text-2);display:flex;align-items:center;gap:8px">
                 <span class="badge badge-ready" style="font-size:10px">Active</span>
@@ -1072,7 +1072,7 @@
               </div>
               <div style="display:flex;align-items:flex-start;gap:12px;padding:8px 12px;background:var(--bg);border-radius:var(--radius-sm)">
                 <code style="color:var(--primary);font-weight:600">/update</code>
-                <span style="font-size:12.5px;color:var(--text-2)">Fast in-place reload: pulls latest commit &amp; restarts container on existing VM in ~4 seconds without rebuilding infrastructure.</span>
+                <span style="font-size:12.5px;color:var(--text-2)">Zero-downtime update on the existing VM: builds the new version next to the live one and switches NGINX only after a health check.</span>
               </div>
               <div style="display:flex;align-items:flex-start;gap:12px;padding:8px 12px;background:var(--bg);border-radius:var(--radius-sm)">
                 <code style="color:var(--primary);font-weight:600">/status</code>

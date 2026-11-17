@@ -49,6 +49,11 @@ function getMasterKey() {
 }
 
 export const cryptoService = {
+  /** Hex master key (generated and persisted to .env on first use). */
+  getMasterKeyHex() {
+    return getMasterKey().toString('hex');
+  },
+
   /**
    * Encrypt plaintext string using AES-256-GCM
    * Returns formatted string: "enc:v1:<iv_hex>:<auth_tag_hex>:<ciphertext_hex>"

@@ -119,6 +119,10 @@ function initDatabase() {
     try { dbInstance.exec(`ALTER TABLE deployments ADD COLUMN ssl_email TEXT`); } catch {}
     try { dbInstance.exec(`ALTER TABLE users ADD COLUMN provider TEXT DEFAULT 'local'`); } catch {}
     try { dbInstance.exec(`ALTER TABLE users ADD COLUMN avatar_url TEXT DEFAULT ''`); } catch {}
+    try { dbInstance.exec(`ALTER TABLE deployments ADD COLUMN simulated INTEGER DEFAULT 0`); } catch {}
+    try { dbInstance.exec(`ALTER TABLE deployments ADD COLUMN resource_meta TEXT`); } catch {}
+    try { dbInstance.exec(`ALTER TABLE deployments ADD COLUMN ssh_public_key TEXT`); } catch {}
+    try { dbInstance.exec(`ALTER TABLE deployments ADD COLUMN ssh_private_key TEXT`); } catch {}
 
     // Seed default workspace if none
     const wsCount = dbInstance.prepare('SELECT COUNT(*) as count FROM workspaces').get();
@@ -133,28 +137,21 @@ function initDatabase() {
       `).run();
     }
 
-    // Seed default admin user (admin@devlups.com / admin123) if none
-    const userCount = dbInstance.prepare('SELECT COUNT(*) as count FROM users').get();
-    if (userCount.count === 0) {
-      // 50,000 pbkdf2 hash for admin123 with fixed salt
-      const salt = 'a1b2c3d4e5f60718';
-      const hash = 'c589cb87119627338a0d84e028017cd87d6e68fb892528af34e1952d0b34089c';
-      dbInstance.prepare(`
-        INSERT INTO users (id, email, password_hash, name, role)
-        VALUES (1, 'admin@devlups.com', ?, 'Devlups Admin', 'owner')
-      `).run(`${salt}:${hash}`);
-
-      dbInstance.prepare(`
-        INSERT INTO workspace_members (workspace_id, user_id, role)
-        VALUES (1, 1, 'owner')
-      `).run();
-    }
+    // Older versions seeded admin@devlups.com / admin123. Disable that account
+    // if it still has the default password; the first sign-up becomes the owner.
+    dbInstance.prepare(`UPDATE users SET password_hash = 'disabled:default-admin'
+      WHERE email = 'admin@devlups.com' AND password_hash = 'a1b2c3d4e5f60718:c589cb87119627338a0d84e028017cd87d6e68fb892528af34e1952d0b34089c'`).run();
 
     return dbInstance;
   } catch (err) {
     console.error('[Database] SQLite initialization error:', err);
     throw err;
   }
+}
+
+function parseMeta(v) {
+  if (!v) return null;
+  try { return JSON.parse(v); } catch { return null; }
 }
 
 export const db = {
@@ -223,9 +220,11 @@ export const db = {
     const list = database.prepare(sql).all(...params);
 
     // Redact secret tokens in list API
-    return list.map(d => ({
+    return list.map(({ ssh_private_key, ...d }) => ({
       ...d,
-      pat_token: d.pat_token ? '••••••••' : null
+      pat_token: d.pat_token ? '••••••••' : null,
+      env_vars: d.env_vars ? '••••••••' : null,
+      resource_meta: parseMeta(d.resource_meta)
     }));
   },
 
@@ -241,8 +240,23 @@ export const db = {
     if (dep) {
       if (dep.pat_token) dep.pat_token = cryptoService.decrypt(dep.pat_token);
       if (dep.env_vars) dep.env_vars = cryptoService.decrypt(dep.env_vars);
+      delete dep.ssh_private_key;
+      dep.simulated = dep.simulated === 1;
+      dep.resource_meta = parseMeta(dep.resource_meta);
     }
     return dep;
+  },
+
+  /** SSH key pair for VM operations (private key encrypted at rest). */
+  getDeploymentSshKey: (id) => {
+    const row = initDatabase().prepare('SELECT ssh_public_key, ssh_private_key FROM deployments WHERE id = ?').get(id);
+    if (!row || !row.ssh_public_key) return null;
+    return { publicKey: row.ssh_public_key, privateKey: row.ssh_private_key ? cryptoService.decrypt(row.ssh_private_key) : null };
+  },
+
+  setDeploymentSshKey: (id, publicKey, privateKeyPem) => {
+    return initDatabase().prepare('UPDATE deployments SET ssh_public_key = ?, ssh_private_key = ? WHERE id = ?')
+      .run(publicKey, cryptoService.encrypt(privateKeyPem), id);
   },
 
   addDeployment: (data) => {
@@ -315,6 +329,18 @@ export const db = {
       fields.push('ssl_email = ?');
       params.push(sanitizerService.sanitize(extra.ssl_email));
     }
+    if (extra.vm_zone !== undefined) {
+      fields.push('vm_zone = ?');
+      params.push(extra.vm_zone);
+    }
+    if (extra.simulated !== undefined) {
+      fields.push('simulated = ?');
+      params.push(extra.simulated ? 1 : 0);
+    }
+    if (extra.resource_meta !== undefined) {
+      fields.push('resource_meta = ?');
+      params.push(JSON.stringify(extra.resource_meta));
+    }
     if (extra.active_slot !== undefined) {
       fields.push('active_slot = ?');
       params.push(extra.active_slot);
@@ -368,6 +394,8 @@ export const db = {
     const res = stmt.run(name, cleanSlug, owner_id);
     return { id: res.lastInsertRowid, name, slug: cleanSlug, owner_id };
   },
+
+  countUsers: () => initDatabase().prepare("SELECT COUNT(*) AS n FROM users WHERE password_hash NOT LIKE 'disabled:%'").get().n,
 
   getUserByEmail: (email) => {
     const database = initDatabase();

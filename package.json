@@ -2,7 +2,7 @@
   "name": "deployment-server",
   "version": "1.0.0",
   "type": "module",
-  "description": "Enterprise-grade cloud provisioning and application deployment platform for GCP by Devlups Lab",
+  "description": "From a GitHub issue to a live, health-checked app on GCP, AWS, Azure or DigitalOcean",
   "main": "server/server.js",
   "scripts": {
     "start": "node server/server.js",
@@ -28,5 +28,8 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "multer": "^1.4.5-lts.1"
+  },
+  "engines": {
+    "node": ">=22.5"
   }
 }

@@ -1,24 +1,24 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
-import { exec } from 'child_process';
-import dotenv from 'dotenv';
 import { db, logEmitter } from './db.js';
-import { gcpService } from './gcp-service.js';
+import { gcpService, isSandboxCredential } from './gcp-service.js';
 import { awsService } from './aws-service.js';
 import { azureService } from './azure-service.js';
 import { doService } from './do-service.js';
 import { pricingService } from './pricing-service.js';
 import { healthService } from './health-service.js';
-import { addonService } from './addon-service.js';
 import { authService } from './auth-service.js';
-import { sanitizerService } from './sanitizer-service.js';
 import { blueGreenService } from './blue-green-service.js';
+import { vmOps } from './vm-ops-service.js';
+import { safeName } from './startup-script.js';
 
-// Provider router — picks the right service based on cloud_provider field
+// Provider router: picks the service for a deployment's cloud_provider
 function getProviderService(provider) {
   switch ((provider || 'gcp').toLowerCase()) {
     case 'aws':          return awsService;
@@ -30,12 +30,11 @@ function getProviderService(provider) {
   }
 }
 
-dotenv.config();
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3000;
+app.set('trust proxy', 'loopback');
 
 function setSessionCookie(res, token) {
   const isCrossOrigin = Boolean(process.env.FRONTEND_ORIGINS);
@@ -45,39 +44,82 @@ function setSessionCookie(res, token) {
 }
 
 // Multer for JSON credential uploads
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 }
-});
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
-const allowedOrigins = (process.env.FRONTEND_ORIGINS || '')
-  .split(',')
-  .map(origin => origin.trim())
-  .filter(Boolean);
-app.use(cors({
-  origin: allowedOrigins.length ? allowedOrigins : true,
-  credentials: true
-}));
-app.use(express.json({ limit: '10mb' }));
+const allowedOrigins = (process.env.FRONTEND_ORIGINS || '').split(',').map(o => o.trim()).filter(Boolean);
+app.use(cors({ origin: allowedOrigins.length ? allowedOrigins : true, credentials: true }));
+// Keep the raw body for GitHub webhook signature verification
+app.use(express.json({ limit: '10mb', verify: (req, res, buf) => { req.rawBody = buf; } }));
 app.use(express.urlencoded({ extended: true }));
 
-// Auth & Multi-Tenant Workspace Middleware
+function safeEqual(a, b) {
+  const x = Buffer.from(String(a)), y = Buffer.from(String(b));
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
+
+// Identify the caller: user session (Bearer header, cookie, or ?token= for
+// EventSource) or the GitHub bot's service token (DEPLOYMENT_API_TOKEN).
 app.use((req, res, next) => {
   const authHeader = req.headers.authorization;
   const headerToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
-  const cookieToken = authService.getCookie(req, 'deployment_session');
-  const token = headerToken || cookieToken;
+  const queryToken = req.path.endsWith('/logs/stream') ? req.query.token : null;
+  const token = headerToken || authService.getCookie(req, 'deployment_session') || queryToken;
   if (token) {
-    const user = authService.verifyToken(token);
-    if (user) req.user = user;
+    const serviceToken = process.env.DEPLOYMENT_API_TOKEN;
+    if (serviceToken && safeEqual(token, serviceToken)) {
+      req.user = { id: 0, email: 'github-bot', name: 'DeployBase bot', role: 'service' };
+    } else {
+      const user = authService.verifyToken(token);
+      if (user) req.user = user;
+    }
   }
   const wsHeader = req.headers['x-workspace-id'] || req.query.workspace_id;
-  req.workspaceId = wsHeader ? parseInt(wsHeader) : 1;
+  req.workspaceId = wsHeader ? parseInt(wsHeader, 10) : 1;
   next();
 });
 
+// Every /api route needs a signed-in user, except sign-in itself, the
+// public health check, the pricing table and the signed GitHub webhook.
+const PUBLIC_API = [
+  /^\/api\/health$/, /^\/api\/pricing$/, /^\/api\/webhook\/github$/, /^\/api\/github\/app\/setup$/,
+  /^\/api\/auth\/(register|login|oauth\/config|oauth\/continue|oauth\/configure|google|google\/callback|github|github\/callback|me)$/,
+];
+app.use('/api', (req, res, next) => {
+  if (PUBLIC_API.some(r => r.test(req.originalUrl.split('?')[0])) || req.user) return next();
+  res.status(401).json({ success: false, error: 'Sign in required.' });
+});
+
+app.get('/api/health', (req, res) => res.json({ success: true, status: 'ok', uptime: process.uptime() }));
+
 // Serve frontend static files
 app.use(express.static(path.resolve(__dirname, '../public')));
+
+// Who may create an account: ALLOWED_EMAILS / ALLOWED_EMAIL_DOMAINS when set,
+// otherwise only the very first account (the owner).
+function canCreateAccount(email) {
+  const e = String(email || '').toLowerCase();
+  const emails = (process.env.ALLOWED_EMAILS || '').toLowerCase().split(',').map(x => x.trim()).filter(Boolean);
+  const domains = (process.env.ALLOWED_EMAIL_DOMAINS || '').toLowerCase().split(',').map(x => x.trim().replace(/^@/, '')).filter(Boolean);
+  if (emails.length || domains.length) return emails.includes(e) || domains.includes(e.split('@')[1]);
+  return db.countUsers() === 0;
+}
+const SIGNUP_CLOSED = 'Sign-up is closed. Ask the owner to add your email to ALLOWED_EMAILS.';
+
+function oauthUserAllowed(email) {
+  return Boolean(db.getUserByEmail(email)) || canCreateAccount(email);
+}
+
+const DEFAULT_GOOGLE_CLIENT_ID = '130895062908-rlr407sbhr21hhdvfch8nvhp6k9pgvpu.apps.googleusercontent.com';
+/** Verifies a Google Identity Services ID token with Google and checks its audience. */
+async function verifyGoogleIdToken(idToken) {
+  const r = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`);
+  if (!r.ok) throw Object.assign(new Error('Google sign-in token is invalid or expired.'), { status: 401 });
+  const p = await r.json();
+  const audiences = [process.env.GOOGLE_CLIENT_ID, DEFAULT_GOOGLE_CLIENT_ID].filter(Boolean);
+  if (!audiences.includes(p.aud)) throw Object.assign(new Error('Google token was issued for a different app.'), { status: 401 });
+  if (!(p.email_verified === true || p.email_verified === 'true')) throw Object.assign(new Error('Google account email is not verified.'), { status: 401 });
+  return { email: String(p.email).toLowerCase(), name: p.name || '', picture: p.picture || '' };
+}
 
 // ==========================================
 // AUTH & MULTI-TENANT WORKSPACE APIS
@@ -90,8 +132,10 @@ app.post('/api/auth/register', (req, res) => {
     if (!email || !password) return res.status(400).json({ success: false, error: 'Email and password are required' });
     const existing = db.getUserByEmail(email);
     if (existing) return res.status(400).json({ success: false, error: 'User already exists' });
+    if (String(password).length < 8) return res.status(400).json({ success: false, error: 'Password must be at least 8 characters.' });
+    if (!canCreateAccount(email)) return res.status(403).json({ success: false, error: SIGNUP_CLOSED });
     const passwordHash = authService.hashPassword(password);
-    const user = db.createUser({ email, password_hash: passwordHash, name: name || email.split('@')[0], role: 'developer' });
+    const user = db.createUser({ email, password_hash: passwordHash, name: name || email.split('@')[0], role: db.countUsers() === 0 ? 'owner' : 'developer' });
     const token = authService.createToken({ id: user.id, email: user.email, role: user.role, name: user.name });
     setSessionCookie(res, token);
     res.json({ success: true, token, user });
@@ -141,28 +185,24 @@ app.post('/api/auth/oauth/continue', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Valid provider (google or github) is required' });
     }
 
-    let userEmail = (email || '').trim().toLowerCase();
-    let userName = (name || '').trim();
-    let userAvatar = (avatar_url || '').trim();
-
-    // If credential was sent (e.g. Google id_token), parse claims if present
-    if (credential && !userEmail) {
-      try {
-        const parts = credential.split('.');
-        if (parts.length === 3) {
-          const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
-          if (payload.email) userEmail = payload.email.toLowerCase();
-          if (payload.name) userName = payload.name;
-          if (payload.picture) userAvatar = payload.picture;
-        }
-      } catch (err) {
-        console.warn('OAuth token decode warning:', err.message);
-      }
+    let userEmail, userName, userAvatar;
+    if (credential && provider.toLowerCase() === 'google') {
+      // Google Identity Services: the ID token is verified by Google.
+      const g = await verifyGoogleIdToken(credential);
+      userEmail = g.email; userName = g.name; userAvatar = g.picture;
+    } else if (process.env.ALLOW_DEV_LOGIN === 'true') {
+      // Local development only: sign in with an email address.
+      userEmail = String(email || '').trim().toLowerCase();
+      userName = String(name || '').trim();
+      userAvatar = String(avatar_url || '').trim();
+    } else {
+      return res.status(400).json({ success: false, error: 'Use the Google or GitHub sign-in buttons. Email-only sign-in is disabled (ALLOW_DEV_LOGIN).' });
     }
 
     if (!userEmail) {
       return res.status(400).json({ success: false, error: 'Email is required for OAuth authentication' });
     }
+    if (!oauthUserAllowed(userEmail)) return res.status(403).json({ success: false, error: SIGNUP_CLOSED });
 
     const user = db.findOrCreateOAuthUser({
       email: userEmail,
@@ -193,13 +233,20 @@ app.post('/api/auth/oauth/continue', async (req, res) => {
       }
     });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(err.status || 500).json({ success: false, error: err.message });
   }
 });
 
 // Save & Configure OAuth credentials in .env
 app.post('/api/auth/oauth/configure', (req, res) => {
   try {
+    // Signed-in users may change OAuth settings; before any OAuth app is
+    // configured, first-run setup is allowed from this machine only.
+    const firstRun = !process.env.GOOGLE_CLIENT_ID && !process.env.GITHUB_CLIENT_ID;
+    const local = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
+    if (!req.user && !(firstRun && local)) {
+      return res.status(401).json({ success: false, error: 'Sign in to change OAuth settings.' });
+    }
     const { googleClientId, googleClientSecret, githubClientId, githubClientSecret } = req.body;
     const envPath = path.resolve(__dirname, '../.env');
     let envContent = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '';
@@ -315,6 +362,9 @@ app.get('/api/auth/google/callback', async (req, res) => {
     });
     const profile = await userInfoRes.json();
 
+    if (!profile.email || !oauthUserAllowed(profile.email)) {
+      return res.status(403).send(SIGNUP_CLOSED);
+    }
     const user = db.findOrCreateOAuthUser({
       email: profile.email,
       name: profile.name,
@@ -436,6 +486,9 @@ app.get('/api/auth/github/callback', async (req, res) => {
       email = primary ? primary.email : `${profile.login}@users.noreply.github.com`;
     }
 
+    if (!oauthUserAllowed(email)) {
+      return res.status(403).send(SIGNUP_CLOSED);
+    }
     const user = db.findOrCreateOAuthUser({
       email,
       name: profile.name || profile.login,
@@ -690,504 +743,441 @@ app.delete('/api/credentials/:id', (req, res) => {
 // DEPLOYMENTS API
 // ==========================================
 
-// List deployments
+class HttpError extends Error {
+  constructor(status, message) { super(message); this.status = status; }
+}
+const sendError = (res, err) => res.status(err.status || 500).json({ success: false, error: err.message });
+
+const RE = {
+  repo: /^[A-Za-z0-9._-]{1,100}$/,
+  user: /^[A-Za-z0-9-]{1,39}$/,
+  branch: /^[A-Za-z0-9._\/-]{1,100}$/,
+  route: /^\/[A-Za-z0-9._~\/-]{0,100}$/,
+  url: /^https:\/\/[A-Za-z0-9.-]+(:\d+)?\/[A-Za-z0-9._~\/-]+$/,
+  token: /^[A-Za-z0-9_]{10,255}$/,
+  slug: /^[a-z0-9-]{1,40}$/,
+  domain: /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i,
+  email: /^[^@\s'"`$\\]+@[^@\s'"`$\\]+\.[^@\s'"`$\\]+$/,
+};
+const ADDONS = ['none', 'postgres', 'postgresql', 'redis', 'mysql', 'mongo', 'mongodb'];
+const PROVIDER_ALIASES = { google: 'gcp', gcp: 'gcp', aws: 'aws', azure: 'azure', do: 'digitalocean', digitalocean: 'digitalocean', cheapest: 'cheapest' };
+
+function truthy(v) { return v === true || ['true', 'yes', 'on', '1'].includes(String(v).toLowerCase()); }
+
+/** Validates everything that ends up inside the VM startup script. */
+function validateDeploymentInput(b) {
+  const fail = (m) => { throw new HttpError(400, m); };
+  if (!RE.repo.test(b.repo_name || '')) fail('Repository name may only contain letters, digits, ".", "_" and "-".');
+  if (b.git_username && !RE.user.test(b.git_username)) fail('Invalid Git username.');
+  if (b.branch && !RE.branch.test(b.branch)) fail('Invalid branch name.');
+  if (b.repo_url && !RE.url.test(String(b.repo_url).replace(/\.git$/, ''))) fail('Repository URL must be an https:// Git URL.');
+  if (b.pat_token && !RE.token.test(b.pat_token)) fail('The personal access token has an unexpected format.');
+  for (const k of ['frontend_route', 'backend_route']) if (b[k] && !RE.route.test(b[k])) fail(`Invalid ${k.replace('_', ' ')}.`);
+  for (const k of ['frontend_port', 'backend_port']) {
+    if (b[k] !== undefined && b[k] !== '') {
+      const n = Number(b[k]);
+      if (!Number.isInteger(n) || n < 1 || n > 65534) fail(`${k.replace('_', ' ')} must be between 1 and 65534.`);
+    }
+  }
+  if (b.machine_type && !RE.slug.test(b.machine_type)) fail('Invalid machine type.');
+  if (b.vm_zone && !RE.slug.test(b.vm_zone)) fail('Invalid zone.');
+  if (b.domain && b.domain !== '_' && !RE.domain.test(String(b.domain).trim())) fail('The domain contains invalid characters.');
+  if (b.database_addon && !ADDONS.includes(b.database_addon)) fail('Unknown database add-on.');
+  if (b.env_vars && /^ENV_EOF$/m.test(b.env_vars)) fail('Environment variables may not contain the line ENV_EOF.');
+  if (truthy(b.ssl_enabled) && !RE.email.test(String(b.ssl_email || '').trim())) fail('A valid email address is required to issue and renew the HTTPS certificate.');
+}
+
+/** Picks the credential: explicit id, else a verified credential of the requested provider, else the cheapest verified one. */
+function resolveCredential({ credentialId, provider, machineType, workspaceId }) {
+  if (credentialId && credentialId !== 'cheapest') {
+    const cred = db.getCredentialById(Number(credentialId));
+    if (!cred) throw new HttpError(400, 'The selected cloud credential does not exist.');
+    return cred;
+  }
+  const verified = db.getCredentials(workspaceId).filter(c => c.is_verified === 1);
+  const wanted = PROVIDER_ALIASES[String(provider || 'cheapest').toLowerCase()] || 'cheapest';
+  if (wanted !== 'cheapest') {
+    const cred = verified.find(c => (c.cloud_provider || 'gcp') === wanted);
+    if (!cred) throw new HttpError(400, `No verified ${wanted.toUpperCase()} credential. Add one under Cloud Credentials.`);
+    return cred;
+  }
+  if (!verified.length) throw new HttpError(400, 'No verified cloud credential. Add and verify one under Cloud Credentials.');
+  return pricingService.selectCheapestProvider(verified, machineType || 'e2-micro');
+}
+
+function publicDeployment(dep) {
+  if (!dep) return dep;
+  const { pat_token, env_vars, ...rest } = dep;
+  return { ...rest, pat_token: pat_token ? '••••••••' : null, env_vars: env_vars ? '••••••••' : null };
+}
+
+/** Provision, then follow the VM log and probe the public URL until it is healthy. */
+async function startDeployment(id, { simulate = false } = {}) {
+  const dep = db.getDeploymentById(id);
+  const service = getProviderService(dep.cloud_provider);
+  const result = await service.triggerDeployment(id, { simulate });
+  if (!result?.ip || result.simulated) return result;
+
+  const fresh = db.getDeploymentById(id);
+  const host = fresh.domain && fresh.domain !== '_' ? fresh.domain : `${safeName(fresh.repo_name)}.${result.ip}.sslip.io`;
+  db.updateDeploymentStatus(id, 'configuring', { domain: host, logs: `[DNS] Hostname: ${fresh.ssl_enabled ? 'https' : 'http'}://${host}` });
+
+  vmOps.streamDeploymentLog(id, (line) => db.appendDeploymentLog(id, line)).then((outcome) => {
+    if (outcome === 'failed') {
+      db.updateDeploymentStatus(id, 'failed', { error_message: 'The startup script failed on the VM. See the deployment log for the failing step.' });
+    }
+  }).catch(err => db.appendDeploymentLog(id, `[VM Log Stream] ${err.message}`));
+
+  // Public traffic enters through NGINX on port 80/443; the app port is internal to the VM.
+  healthService.verifyDeploymentHealth(id, result.ip, 80).catch(console.error);
+  return result;
+}
+
+/** Zero-downtime update on the existing VM (blue/green for Docker apps). */
+function runUpdate(id, trigger) {
+  const dep = db.getDeploymentById(id);
+  if (!dep) throw new HttpError(404, 'Deployment not found');
+  if (dep.simulated) throw new HttpError(409, 'This is a sandbox deployment; there is no VM to update.');
+  if (!['ready', 'degraded', 'failed'].includes(dep.status)) throw new HttpError(409, `Deployment is busy (${dep.status}). Try again when it is ready.`);
+  if (!dep.vm_ip) throw new HttpError(409, 'Deployment has no VM yet.');
+
+  db.updateDeploymentStatus(id, 'deploying', { error_message: '', logs: `\n[${new Date().toISOString()}] [Update] Triggered by ${trigger}. Pulling ${dep.branch || 'main'}...` });
+  (async () => {
+    try {
+      const r = await vmOps.update(id, (line) => db.appendDeploymentLog(id, line.startsWith('[') ? line : `[Update] ${line}`));
+      const probe = await healthService.pingUrl(`http://${dep.vm_ip}`, 8000);
+      const status = probe.healthy ? 'ready' : 'degraded';
+      if (r.ok) {
+        db.updateDeploymentStatus(id, status, {
+          active_slot: r.activeSlot || undefined,
+          logs: `[Update] Done${r.activeSlot ? `; live slot ${r.activeSlot.toUpperCase()}` : ''}. Public check: ${probe.healthy ? `HTTP ${probe.statusCode}` : probe.error || `HTTP ${probe.statusCode}`}.`,
+        });
+      } else {
+        db.updateDeploymentStatus(id, status, {
+          error_message: `Update failed (exit ${r.code}); the previous version is still serving.`,
+          logs: `[Update] Failed with exit code ${r.code}. The previous version is still serving.`,
+        });
+      }
+    } catch (err) {
+      db.updateDeploymentStatus(id, 'degraded', { error_message: err.message, logs: `[Update] ${err.message}` });
+    }
+  })();
+  return dep;
+}
+
+function getDeploymentOr404(id) {
+  const dep = db.getDeploymentById(id);
+  if (!dep) throw new HttpError(404, 'Deployment not found');
+  return dep;
+}
+
 app.get('/api/deployments', (req, res) => {
   try {
-    const list = db.getDeployments(req.workspaceId);
-    res.json({ success: true, deployments: list });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
+    res.json({ success: true, deployments: db.getDeployments(req.workspaceId) });
+  } catch (err) { sendError(res, err); }
 });
 
-// Get single deployment
 app.get('/api/deployments/:id', (req, res) => {
   try {
-    const dep = db.getDeploymentById(req.params.id);
-    if (!dep) return res.status(404).json({ success: false, error: 'Deployment not found' });
-    res.json({ success: true, deployment: dep });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
+    res.json({ success: true, deployment: publicDeployment(getDeploymentOr404(req.params.id)) });
+  } catch (err) { sendError(res, err); }
 });
 
-// Create and trigger new deployment
 app.post('/api/deployments', async (req, res) => {
   try {
-    const {
-      repo_name,
-      git_username,
-      repo_url,
-      repo_type = 'public',
-      pat_token,
-      branch = 'main',
-      frontend_present = 'yes',
-      frontend_route = '/',
-      frontend_port = 3000,
-      backend_present = 'yes',
-      backend_route = '/api',
-      backend_port = 5000,
-      domain = '_',
-      ssl_enabled = false,
-      ssl_email = '',
-      gcp_credential_id,
-      machine_type = 'e2-micro',
-      vm_zone = 'us-central1-a',
-      env_vars = '',
-      database_addon = 'none',
-      simulate = false
-    } = req.body;
-
-    if (!repo_name) {
-      return res.status(400).json({ success: false, error: 'Repository name is required.' });
-    }
-    const sslEnabled = ssl_enabled === true || ssl_enabled === 'true' || ssl_enabled === 'yes' || ssl_enabled === 'on' || ssl_enabled === '1';
-    const isSimulation = simulate === true || simulate === 'true' || simulate === 'yes' || simulate === 'on' || simulate === '1';
-    if (sslEnabled && !String(ssl_email).trim()) {
-      return res.status(400).json({ success: false, error: 'An email address is required to issue and renew the HTTPS certificate.' });
-    }
-    if (sslEnabled && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(ssl_email).trim())) {
-      return res.status(400).json({ success: false, error: 'A valid certificate email address is required.' });
-    }
-    if (sslEnabled && domain && domain !== '_' && !/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i.test(String(domain).trim())) {
-      return res.status(400).json({ success: false, error: 'The SSL domain contains invalid characters.' });
-    }
-
-    // Resolve credential: if 'cheapest' requested or omitted, pick optimal verified credential
-    let selectedCredId = gcp_credential_id ? Number(gcp_credential_id) : null;
-    let selectedCred = selectedCredId ? db.getCredentialById(selectedCredId) : null;
-
-    if (!selectedCred || req.body.cloud_provider === 'cheapest' || gcp_credential_id === 'cheapest') {
-      const allCreds = db.getCredentials();
-      const verified = allCreds.filter(c => c.is_verified === 1);
-      const optimal = pricingService.selectCheapestProvider(verified.length > 0 ? verified : allCreds, machine_type);
-      if (optimal) {
-        selectedCred = optimal;
-        selectedCredId = optimal.id;
-      }
-    }
-
-    const constructedRepoUrl = repo_url || `https://github.com/${git_username || 'user'}/${repo_name}`;
+    const b = req.body;
+    validateDeploymentInput(b);
+    const simulate = truthy(b.simulate);
+    const sslEnabled = truthy(b.ssl_enabled);
+    const cred = resolveCredential({ credentialId: b.gcp_credential_id, provider: b.cloud_provider, machineType: b.machine_type, workspaceId: req.workspaceId });
+    const sandbox = simulate || isSandboxCredential(cred);
+    const repoName = b.repo_name;
 
     const id = db.addDeployment({
-      repo_name,
-      git_username: git_username || 'user',
-      repo_url: constructedRepoUrl,
-      repo_type,
-      pat_token,
-      branch,
-      frontend_present,
-      frontend_route,
-      frontend_port: Number(frontend_port),
-      backend_present,
-      backend_route,
-      backend_port: Number(backend_port),
-      domain,
+      repo_name: repoName,
+      git_username: b.git_username || 'user',
+      repo_url: (b.repo_url || `https://github.com/${b.git_username || 'user'}/${repoName}`).replace(/\.git$/, ''),
+      repo_type: b.repo_type === 'private' ? 'private' : 'public',
+      pat_token: b.pat_token || null,
+      branch: b.branch || 'main',
+      frontend_present: b.frontend_present === 'no' ? 'no' : 'yes',
+      frontend_route: b.frontend_route || '/',
+      frontend_port: Number(b.frontend_port) || 3000,
+      backend_present: b.backend_present === 'no' ? 'no' : 'yes',
+      backend_route: b.backend_route || '/api',
+      backend_port: Number(b.backend_port) || 5000,
+      domain: b.domain ? String(b.domain).trim().toLowerCase() : '_',
       ssl_enabled: sslEnabled,
-      ssl_email: String(ssl_email).trim(),
-      gcp_credential_id: selectedCredId,
-      machine_type,
-      vm_name: `devlups-${repo_name.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${Date.now().toString().slice(-4)}`,
-      vm_zone,
-      env_vars,
-      database_addon,
+      ssl_email: String(b.ssl_email || '').trim(),
+      gcp_credential_id: cred.id,
+      machine_type: b.machine_type || 'e2-micro',
+      vm_name: `devlups-${repoName.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 40)}-${Date.now().toString().slice(-4)}`,
+      vm_zone: b.vm_zone || 'us-central1-a',
+      env_vars: b.env_vars || '',
+      database_addon: b.database_addon || 'none',
       workspace_id: req.workspaceId || 1,
       active_slot: 'blue',
-      status: 'pending'
+      status: 'pending',
     });
+    if (sandbox) db.updateDeploymentStatus(id, 'pending', { simulated: true });
 
-    // Pick provider service
-    const providerService = getProviderService(selectedCred?.cloud_provider || 'gcp');
-
-    // Run provisioning asynchronously with health check probe afterwards
-    providerService.triggerDeployment(id, { simulate: isSimulation })
-      .then(result => {
-        if (result?.ip && result.ip !== 'Provisioned' && !result.ip.includes('unknown')) {
-          const cleanDomain = domain && domain !== '_'
-            ? String(domain).trim().toLowerCase()
-            : `${repo_name.toLowerCase().replace(/[^a-z0-9-]/g, '')}.${result.ip}.sslip.io`;
-          db.updateDeploymentStatus(id, isSimulation ? 'ready' : 'configuring', {
-            domain: cleanDomain,
-            logs: `\n[DNS Engine] Hostname configured: ${sslEnabled ? 'https' : 'http'}://${cleanDomain}`
-          });
-          // Background health check
-          // Public traffic enters through NGINX on port 80/443; the app port is
-          // internal to the VM and must not be probed from the deployment server.
-          if (!isSimulation) {
-            healthService.verifyDeploymentHealth(id, result.ip, 80).catch(console.error);
-          }
-        }
-      })
-      .catch(err => {
-        console.error(`Background deployment error for #${id}:`, err);
-      });
-
+    startDeployment(id, { simulate }).catch(err => console.error(`Deployment #${id} failed:`, err.message));
     res.json({
       success: true,
       id,
-      message: `Deployment queued on ${selectedCred?.cloud_provider?.toUpperCase() || 'Cloud Provider'}.`,
-      deployment: db.getDeploymentById(id)
+      message: `Deployment queued on ${(cred.cloud_provider || 'gcp').toUpperCase()}${sandbox ? ' (sandbox, simulated)' : ''}.`,
+      deployment: publicDeployment(db.getDeploymentById(id)),
     });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
+  } catch (err) { sendError(res, err); }
 });
 
-// High-Availability (HA) Zero-Downtime Blue/Green Deployment
-app.post('/api/deployments/:id/update', async (req, res) => {
+/** Registers a repository (GitHub App installation) without deploying it. */
+app.post('/api/repositories/register', (req, res) => {
   try {
-    const id = req.params.id;
-    const dep = db.getDeploymentById(id);
-    if (!dep) return res.status(404).json({ success: false, error: 'Deployment not found' });
-
-    const currentSlot = dep.active_slot || 'blue';
-    const nextSlot = blueGreenService.getNextSlot(currentSlot);
-    const ports = blueGreenService.getSlotPorts(dep.frontend_port || 3000);
-    const targetPort = ports[nextSlot];
-
-    const startTime = new Date().toISOString();
-    db.appendDeploymentLog(id, `\n[${startTime}] [HA Engine] Zero-Downtime Blue/Green rollout initiated.`);
-    db.appendDeploymentLog(id, `[HA Engine] Current Slot: ${currentSlot.toUpperCase()} (Port ${ports[currentSlot]}) -> Target Slot: ${nextSlot.toUpperCase()} (Port ${targetPort})`);
-    db.updateDeploymentStatus(id, 'deploying');
-
-    // Asynchronously perform Blue/Green hot-reload
-    (async () => {
-      try {
-        await new Promise(r => setTimeout(r, 1000));
-        db.appendDeploymentLog(id, `[HA Engine] Pulling git branch ${dep.branch || 'main'} into target slot ${nextSlot}...`);
-        await new Promise(r => setTimeout(r, 1200));
-        db.appendDeploymentLog(id, `[HA Engine] Building isolated container: ${dep.repo_name}-${nextSlot}...`);
-        db.appendDeploymentLog(id, `[HA Engine] Starting container instance on internal port ${targetPort}...`);
-        await new Promise(r => setTimeout(r, 1000));
-        db.appendDeploymentLog(id, `[HA Engine] Probing health on 127.0.0.1:${targetPort}/ ... HTTP 200 OK (Latency: 11ms).`);
-        db.appendDeploymentLog(id, `[HA Engine] Seamlessly switching NGINX upstream to ${nextSlot} (port ${targetPort}) via zero-drop reload...`);
-        db.appendDeploymentLog(id, `[HA Engine] 100% live traffic shifted with 0.00s downtime.`);
-        db.appendDeploymentLog(id, `[HA Engine] Gracefully stopping old slot ${currentSlot}...`);
-
-        db.updateDeploymentStatus(id, 'ready', {
-          active_slot: nextSlot,
-          logs: `\n[HA Engine] Blue/Green deployment succeeded at ${new Date().toISOString()}. Active slot: ${nextSlot.toUpperCase()}`
-        });
-
-        app.post('/api/deployments/:id/ssl', async (req, res) => {
-          const id = Number(req.params.id);
-          const email = String(req.body?.email || '').trim();
-          if (!Number.isInteger(id) || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
-            return res.status(400).json({ success: false, error: 'A valid certificate email is required.' });
-          }
-
-          try {
-            const deployment = db.getDeploymentById(id);
-            if (!deployment) return res.status(404).json({ success: false, error: 'Deployment not found.' });
-            if (deployment.cloud_provider !== 'gcp') {
-              return res.status(400).json({ success: false, error: 'Post-deployment SSL currently supports GCP deployments.' });
-            }
-            db.updateDeploymentStatus(id, 'configuring', {
-              logs: "\n[SSL] Installing Certbot and requesting a Let's Encrypt certificate from the VM..."
-            });
-            const result = await gcpService.enableSsl(id, email);
-            const database = db.getDeploymentById(id);
-            res.json({ success: true, deployment: database, url: `https://${result.domain}` });
-          } catch (err) {
-            db.updateDeploymentStatus(id, 'failed', { error_message: err.message, logs: `\n[SSL] Failed: ${err.message}` });
-            res.status(500).json({ success: false, error: err.message });
-          }
-        });
-      } catch (err) {
-        db.appendDeploymentLog(id, `[HA Engine Error]: ${err.message}`);
-        db.updateDeploymentStatus(id, 'ready');
-      }
-    })();
-
-    res.json({
-      success: true,
-      message: `Zero-Downtime Blue/Green deployment initiated (Target Slot: ${nextSlot.toUpperCase()} on port ${targetPort}).`,
-      currentSlot,
-      nextSlot,
-      targetPort
+    const { repo_name, git_username, repo_url, repo_type } = req.body;
+    if (!RE.repo.test(repo_name || '')) throw new HttpError(400, 'Invalid repository name.');
+    const exists = db.getDeployments().find(d => d.repo_name.toLowerCase() === repo_name.toLowerCase());
+    if (exists) return res.json({ success: true, id: exists.id, message: 'Repository already known.' });
+    const id = db.addDeployment({
+      repo_name, git_username: git_username || 'github-user', repo_url, repo_type: repo_type === 'private' ? 'private' : 'public',
+      status: 'registered', workspace_id: req.workspaceId || 1,
+      logs: `Registered via GitHub App installation by @${git_username || 'unknown'}. Comment /deploy on an issue to launch it.`,
     });
+    res.json({ success: true, id });
+  } catch (err) { sendError(res, err); }
+});
+
+// Zero-downtime update (real blue/green for Docker apps)
+app.post('/api/deployments/:id/update', (req, res) => {
+  try {
+    const dep = runUpdate(req.params.id, req.user?.email || req.user?.name || 'dashboard');
+    const ports = blueGreenService.getSlotPorts(dep.frontend_port || 3000);
+    const current = dep.active_slot || 'blue';
+    res.json({ success: true, message: 'Update started. Follow the deployment log for progress.', currentSlot: current, nextSlot: blueGreenService.getNextSlot(current), ports });
+  } catch (err) { sendError(res, err); }
+});
+
+// Enable HTTPS on a running deployment (any provider)
+app.post('/api/deployments/:id/ssl', async (req, res) => {
+  try {
+    const email = String(req.body?.email || '').trim();
+    if (!RE.email.test(email)) throw new HttpError(400, 'A valid certificate email is required.');
+    const dep = getDeploymentOr404(req.params.id);
+    if (dep.simulated) throw new HttpError(409, 'This is a sandbox deployment; there is no VM to configure.');
+    db.updateDeploymentStatus(dep.id, dep.status, { logs: "[SSL] Installing Certbot and requesting a Let's Encrypt certificate..." });
+    const { domain } = await vmOps.enableSsl(dep.id, email);
+    db.updateDeploymentStatus(dep.id, 'ready', { domain, ssl_enabled: true, ssl_email: email, logs: `[SSL] HTTPS enabled at https://${domain}` });
+    res.json({ success: true, deployment: publicDeployment(db.getDeploymentById(dep.id)), url: `https://${domain}` });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    db.appendDeploymentLog(req.params.id, `[SSL] Failed: ${err.message}`);
+    sendError(res, err);
   }
 });
 
-// Interactive Web-Based Terminal Exec API
+// Web terminal: runs the command on the deployment's VM over SSH
+const BLOCKED_COMMANDS = [/rm\s+-rf\s+\/(\s|$)/, /\bmkfs\b/, /:\(\)\s*\{\s*:\|:&\s*\};:/, /\bshutdown\b/, /\breboot\b/, /\bdd\s+if=.*of=\/dev\//];
 app.post('/api/deployments/:id/terminal/exec', async (req, res) => {
   try {
-    const dep = db.getDeploymentById(req.params.id);
-    if (!dep) return res.status(404).json({ success: false, error: 'Deployment not found' });
-    const rawCmd = (req.body.command || '').trim();
-    if (!rawCmd) return res.json({ success: true, output: '' });
-
-    // Enforce security policies
-    const lower = rawCmd.toLowerCase();
-    if (lower.includes('rm -rf /') || lower.includes('mkfs') || lower.includes(':(){ :|:& };:')) {
-      return res.status(400).json({ success: false, error: 'Prohibited command rejected by Deployment Server security engine.' });
-    }
-
-    // Process operational commands safely
-    let cmdToRun = rawCmd;
-    if (rawCmd.startsWith('docker ps')) {
-      cmdToRun = `echo "CONTAINER ID   IMAGE                   COMMAND                  CREATED          STATUS          PORTS                    NAMES\n` +
-                 `a1c9e8d7f2b3   ${dep.repo_name}:latest     \\\"docker-entrypoint.s…\\\"   15 minutes ago   Up 15 minutes   0.0.0.0:${dep.frontend_port || 3000}->${dep.frontend_port || 3000}/tcp   ${dep.repo_name}-${dep.active_slot || 'blue'}\n` +
-                 (dep.database_addon && dep.database_addon !== 'none' ? `f7e6d5c4b3a2   ${dep.database_addon}:latest        \\\"docker-entrypoint.s…\\\"   15 minutes ago   Up 15 minutes   0.0.0.0:5432->5432/tcp   db-${dep.database_addon}-${dep.repo_name}\"` : `\"`);
-    } else if (rawCmd.startsWith('cat /etc/nginx')) {
-      cmdToRun = `echo "${blueGreenService.generateUpstreamConf(dep.repo_name, dep.frontend_port || 3000).replace(/"/g, '\\"')}"`;
-    } else if (rawCmd === 'top' || rawCmd === 'htop') {
-      cmdToRun = `echo "Tasks: 18 total, 1 running, 17 sleeping, 0 stopped\n%Cpu(s):  2.4 us,  0.8 sy,  0.0 ni, 96.8 id,  0.0 wa\nMiB Mem :   1024.0 total,    418.2 free,    248.6 used,    357.2 buff/cache\n\n  PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND\n  1042 root     20   0  712480 184512  32810 S   2.4  18.0   0:18.28 node server.js"`;
-    }
-
-    exec(cmdToRun, { timeout: 6000, maxBuffer: 1024 * 512 }, (err, stdout, stderr) => {
-      let output = (stdout || '') + (stderr || '');
-      if (err && !output) output = err.message;
-      // Sanitize all output to prevent exposing raw tokens
-      const cleanOutput = sanitizerService.sanitize(output);
-      res.json({
-        success: true,
-        command: rawCmd,
-        output: cleanOutput,
-        cwd: `/opt/${dep.repo_name}`,
-        activeSlot: dep.active_slot || 'blue',
-        host: dep.vm_name || 'devlups-node-1'
-      });
-    });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
+    const dep = getDeploymentOr404(req.params.id);
+    const command = String(req.body.command || '').trim();
+    if (!command) return res.json({ success: true, output: '' });
+    if (command.length > 2000) throw new HttpError(400, 'Command is too long.');
+    if (BLOCKED_COMMANDS.some(r => r.test(command))) throw new HttpError(400, 'This command is blocked by the Deployment Server terminal policy.');
+    const result = await vmOps.exec(dep.id, command);
+    console.log(`[Terminal] ${req.user?.email || 'user'} on #${dep.id}: ${command.slice(0, 200)}`);
+    res.json({ success: true, command, output: result.output, exitCode: result.exitCode, cwd: `/opt/${dep.repo_name}`, activeSlot: dep.active_slot || 'blue', host: dep.vm_name });
+  } catch (err) { sendError(res, err); }
 });
 
-// Real-Time Log Streaming via SSE (Server-Sent Events)
+// Live log stream (Server-Sent Events)
 app.get('/api/deployments/:id/logs/stream', (req, res) => {
-  const id = req.params.id;
-  const dep = db.getDeploymentById(id);
+  const dep = db.getDeploymentById(req.params.id);
   if (!dep) return res.status(404).json({ success: false, error: 'Deployment not found' });
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('X-Accel-Buffering', 'no');
   if (res.flushHeaders) res.flushHeaders();
 
-  // Send initial accumulated logs
-  if (dep.logs) {
-    const lines = dep.logs.split('\n');
-    for (const line of lines) {
-      if (line.trim()) {
-        res.write(`data: ${JSON.stringify({ text: line, timestamp: new Date().toISOString() })}\n\n`);
-      }
-    }
-  }
-
-  // Subscribe to live log emissions
-  const logHandler = (text) => {
-    res.write(`data: ${JSON.stringify({ text, timestamp: new Date().toISOString() })}\n\n`);
-  };
-
-  logEmitter.on(`log:${id}`, logHandler);
-
-  req.on('close', () => {
-    logEmitter.off(`log:${id}`, logHandler);
-  });
+  const send = (text) => res.write(`data: ${JSON.stringify({ text, timestamp: new Date().toISOString() })}\n\n`);
+  (dep.logs || '').split('\n').filter(l => l.trim()).forEach(send);
+  const handler = (text) => send(text);
+  logEmitter.on(`log:${dep.id}`, handler);
+  const keepAlive = setInterval(() => res.write(': keep-alive\n\n'), 25000);
+  req.on('close', () => { clearInterval(keepAlive); logEmitter.off(`log:${dep.id}`, handler); });
 });
 
-// Live Container Telemetry & Metrics (CPU, RAM, Disk, Network)
-app.get('/api/deployments/:id/metrics', (req, res) => {
+// Live VM metrics (read from the VM over SSH, cached 10 s)
+app.get('/api/deployments/:id/metrics', async (req, res) => {
   try {
-    const dep = db.getDeploymentById(req.params.id);
-    if (!dep) return res.status(404).json({ success: false, error: 'Deployment not found' });
-    const metrics = addonService.getTelemetry(dep);
-    res.json({ success: true, metrics });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
+    const dep = getDeploymentOr404(req.params.id);
+    if (dep.simulated) throw new HttpError(409, 'Sandbox deployment: no VM metrics.');
+    res.json({ success: true, metrics: await vmOps.metrics(dep.id) });
+  } catch (err) { sendError(res, err); }
 });
 
-// Pricing Comparison & Arbitrage API
+// Pricing comparison (static list-price table)
 app.get('/api/pricing', (req, res) => {
   try {
-    const tier = req.query.tier || 'e2-micro';
-    const comparison = pricingService.getComparison(tier);
-    res.json({ success: true, ...comparison });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
+    res.json({ success: true, ...pricingService.getComparison(req.query.tier || 'e2-micro') });
+  } catch (err) { sendError(res, err); }
 });
 
-// Delete deployment
+// Tear down the cloud resources of a deployment
+app.post('/api/deployments/:id/destroy', (req, res) => {
+  try {
+    const dep = getDeploymentOr404(req.params.id);
+    if (['destroying', 'destroyed'].includes(dep.status)) throw new HttpError(409, `Deployment is already ${dep.status}.`);
+    const log = (line) => db.appendDeploymentLog(dep.id, line);
+    if (dep.simulated) {
+      db.updateDeploymentStatus(dep.id, 'destroyed', { logs: '[Destroy] Sandbox deployment closed (no cloud resources existed).' });
+      return res.json({ success: true, message: 'Sandbox deployment closed.' });
+    }
+    db.updateDeploymentStatus(dep.id, 'destroying', { logs: `[Destroy] Tearing down cloud resources (requested by ${req.user?.email || 'user'})...` });
+    getProviderService(dep.cloud_provider).destroy(dep, log)
+      .then(() => db.updateDeploymentStatus(dep.id, 'destroyed', { logs: '[Destroy] All cloud resources removed.' }))
+      .catch(err => db.updateDeploymentStatus(dep.id, 'failed', { error_message: `Destroy failed: ${err.message}`, logs: `[Destroy] Failed: ${err.message}` }));
+    res.json({ success: true, message: 'Teardown started. Follow the deployment log for progress.' });
+  } catch (err) { sendError(res, err); }
+});
+
+// Delete the deployment record (use /destroy first to remove cloud resources)
 app.delete('/api/deployments/:id', (req, res) => {
   try {
-    db.deleteDeployment(req.params.id);
+    const dep = getDeploymentOr404(req.params.id);
+    if (dep.status === 'destroying') throw new HttpError(409, 'Teardown is still running.');
+    db.deleteDeployment(dep.id);
     res.json({ success: true, message: 'Deployment record removed.' });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
+  } catch (err) { sendError(res, err); }
 });
 
 // ==========================================
-// GITHUB WEBHOOK INTEGRATION (Replaces AWS S3 & Old API)
+// GITHUB WEBHOOK (signed with GITHUB_WEBHOOK_SECRET)
 // ==========================================
 
+function verifyGithubSignature(req) {
+  const secret = process.env.GITHUB_WEBHOOK_SECRET;
+  const sig = req.headers['x-hub-signature-256'];
+  if (!secret || !sig || !req.rawBody) return false;
+  const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(req.rawBody).digest('hex');
+  return sig.length === expected.length && crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
+}
+
+/** Parses "/deploy [provider]", "/update", "/redeploy" ChatOps commands. */
+export function parseChatOpsCommand(text) {
+  const t = String(text || '').toLowerCase();
+  const deploy = t.match(/(?:^|\s)\/(?:deploy|launch)(?:\s+(gcp|google|aws|azure|digitalocean|do|cheapest))?(?=\s|$)/);
+  if (deploy) return { action: 'deploy', provider: PROVIDER_ALIASES[deploy[1] || 'cheapest'] };
+  if (/(?:^|\s)\/(?:update|redeploy)(?=\s|$)/.test(t)) return { action: 'update' };
+  if (/(?:^|\s)\/status(?=\s|$)/.test(t)) return { action: 'status' };
+  return null;
+}
+
 app.post('/api/webhook/github', async (req, res) => {
+  if (!process.env.GITHUB_WEBHOOK_SECRET) {
+    return res.status(503).json({ success: false, error: 'Webhook disabled: set GITHUB_WEBHOOK_SECRET on the server and in the GitHub webhook settings.' });
+  }
+  if (!verifyGithubSignature(req)) return res.status(401).json({ success: false, error: 'Invalid webhook signature.' });
+
   try {
     const event = req.headers['x-github-event'];
     const payload = req.body;
+    const repository = payload.repository;
+    const sender = payload.sender?.login || 'github-user';
+    const findDeployment = () => repository && db.getDeployments()
+      .filter(d => d.repo_name.toLowerCase() === repository.name.toLowerCase() && !['registered', 'destroyed', 'destroying'].includes(d.status))
+      .sort((a, b) => b.id - a.id)[0];
 
-    console.log(`[GitHub Webhook] Received event: ${event}`);
+    if (event === 'ping') return res.json({ success: true, message: 'pong' });
 
-    // 1. Repo Added to GitHub App
-    if (event === 'installation_repositories') {
-      const { action, repositories_added, sender } = payload;
-      if (action === 'added' && repositories_added) {
-        for (const repo of repositories_added) {
-          console.log(`[GitHub Webhook] Repo added: ${repo.name} by @${sender?.login}`);
-          db.addDeployment({
-            repo_name: repo.name,
-            git_username: sender?.login || 'github-user',
-            repo_url: repo.html_url || `https://github.com/${repo.full_name}`,
-            repo_type: repo.private ? 'private' : 'public',
-            status: 'pending',
-            logs: `Auto-registered via GitHub App Installation event by @${sender?.login}`
-          });
-        }
+    if (event === 'push') {
+      const branch = (payload.ref || '').replace('refs/heads/', '');
+      const dep = findDeployment();
+      if (dep && branch === (dep.branch || 'main')) {
+        runUpdate(dep.id, `push by @${payload.pusher?.name || sender} (${payload.head_commit?.id?.slice(0, 7) || 'latest'})`);
+        return res.json({ success: true, message: `Update started for deployment #${dep.id}.` });
       }
+      return res.json({ success: true, message: 'No deployment tracks this branch.' });
     }
 
-    // 2. Push Event &rarr; Fast In-Place Update or Auto-Deployment
-    else if (event === 'push') {
-      const repoName = payload.repository?.name;
-      const pusher = payload.pusher?.name || payload.sender?.login || 'committer';
-      const commitMsg = payload.head_commit?.message || 'New commit';
-      const branch = (payload.ref || '').replace('refs/heads/', '') || 'main';
-
-      console.log(`[GitHub Webhook] Push to ${repoName} (${branch}) by @${pusher}: "${commitMsg}"`);
-
-      // Check if this repo is already deployed
-      const existing = db.getDeployments().find(d => d.repo_name.toLowerCase() === repoName.toLowerCase());
-      if (existing) {
-        console.log(`[GitHub Webhook] Existing deployment found (#${existing.id}). Triggering in-place update...`);
-        db.appendDeploymentLog(existing.id, `\n[${new Date().toISOString()}] [GitHub Push] Triggered by @${pusher}: "${commitMsg}" (commit ${payload.head_commit?.id?.slice(0, 7) || 'latest'})`);
-        db.updateDeploymentStatus(existing.id, 'deploying');
-
-        // Execute hot-reload
-        setTimeout(() => {
-          db.appendDeploymentLog(existing.id, `[FastUpdate] git pull origin ${branch} completed. Reloading services...`);
-          db.updateDeploymentStatus(existing.id, 'ready', {
-            logs: `\n[GitHub Webhook] Auto-deployed push to branch "${branch}" in 3.8s.`
-          });
-        }, 1500);
-      }
-    }
-
-    // 3. Issue or Issue Comment (ChatOps Slash Commands)
-    else if (event === 'issues' || event === 'issue_comment') {
-      const repository = payload.repository;
-      const text = (event === 'issue_comment' ? payload.comment?.body : payload.issue?.title + ' ' + (payload.issue?.body || '')).toLowerCase();
-      const sender = payload.sender?.login || 'user';
-
-      if (text.includes('/deploy') || text.includes('deploy') || text.includes('launch')) {
-        let provider = 'cheapest';
-        if (text.includes('aws')) provider = 'aws';
-        else if (text.includes('azure')) provider = 'azure';
-        else if (text.includes('digitalocean') || text.includes('do')) provider = 'digitalocean';
-        else if (text.includes('gcp')) provider = 'gcp';
-
-        console.log(`[GitHub ChatOps] @${sender} requested deployment on ${provider.toUpperCase()}`);
-
-        const creds = db.getCredentials();
-        const optimalCred = pricingService.selectCheapestProvider(creds.filter(c => c.is_verified === 1) || creds);
-
+    if (event === 'issues' || event === 'issue_comment') {
+      if (event === 'issue_comment' && payload.comment?.user?.type === 'Bot') return res.json({ success: true });
+      if (event === 'issues' && payload.action !== 'opened') return res.json({ success: true });
+      const text = event === 'issue_comment' ? payload.comment?.body : `${payload.issue?.title || ''}\n${payload.issue?.body || ''}`;
+      const cmd = parseChatOpsCommand(text);
+      if (cmd?.action === 'deploy') {
+        const cred = resolveCredential({ provider: cmd.provider });
         const id = db.addDeployment({
-          repo_name: repository.name,
-          git_username: sender,
-          repo_url: repository.html_url,
-          repo_type: repository.private ? 'private' : 'public',
-          gcp_credential_id: optimalCred?.id || null,
-          status: 'pending',
-          logs: `ChatOps deployment triggered by @${sender} via GitHub comment: "${text.slice(0, 60)}..."`
+          repo_name: repository.name, git_username: repository.owner?.login || sender, repo_url: repository.html_url,
+          repo_type: repository.private ? 'private' : 'public', branch: repository.default_branch || 'main',
+          gcp_credential_id: cred.id, status: 'pending', logs: `ChatOps /deploy by @${sender} (${cmd.provider}).`,
         });
-
-        const providerService = getProviderService(optimalCred?.cloud_provider || provider);
-        providerService.triggerDeployment(id, { simulate: true }).catch(console.error);
+        startDeployment(id).catch(err => console.error(`ChatOps deployment #${id} failed:`, err.message));
+        return res.json({ success: true, id, message: `Deployment #${id} started on ${(cred.cloud_provider || 'gcp').toUpperCase()}.` });
       }
-      else if (text.includes('/update') || text.includes('/redeploy')) {
-        const existing = db.getDeployments().find(d => d.repo_name.toLowerCase() === repository.name.toLowerCase());
-        if (existing) {
-          db.appendDeploymentLog(existing.id, `\n[ChatOps] Fast in-place update triggered by @${sender}`);
-          db.updateDeploymentStatus(existing.id, 'deploying');
-          setTimeout(() => {
-            db.updateDeploymentStatus(existing.id, 'ready', { logs: `\n[ChatOps] In-place update complete.` });
-          }, 1500);
-        }
+      if (cmd?.action === 'update') {
+        const dep = findDeployment();
+        if (!dep) throw new HttpError(404, 'No deployment found for this repository.');
+        runUpdate(dep.id, `/update by @${sender}`);
+        return res.json({ success: true, message: `Update started for deployment #${dep.id}.` });
       }
     }
 
-    res.json({ success: true, message: 'Webhook event processed successfully.' });
+    res.json({ success: true, message: 'Event ignored.' });
   } catch (err) {
     console.error('[GitHub Webhook Error]:', err.message);
-    res.status(500).json({ success: false, error: err.message });
+    sendError(res, err);
   }
 });
 
-// System stats endpoint
+// System stats
 app.get('/api/system/stats', (req, res) => {
   try {
     const creds = db.getCredentials();
     const deps = db.getDeployments();
-    const activeVMs = deps.filter(d => d.status === 'ready').length;
-    const verifiedCreds = creds.filter(c => c.is_verified === 1).length;
-
     res.json({
       success: true,
       stats: {
-        totalDeployments: deps.length,
-        activeVMs,
+        totalDeployments: deps.filter(d => !['registered', 'destroyed'].includes(d.status)).length,
+        activeVMs: deps.filter(d => d.status === 'ready' && !d.simulated).length,
         totalCredentials: creds.length,
-        verifiedCredentials: verifiedCreds,
-        platforms: 'GCP · AWS · Azure · More',
+        verifiedCredentials: creds.filter(c => c.is_verified === 1).length,
+        platforms: 'GCP · AWS · Azure · DigitalOcean',
         storageEngine: 'SQLite',
-        systemUptime: process.uptime()
-      }
+        systemUptime: process.uptime(),
+      },
     });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
-  }
+  } catch (err) { sendError(res, err); }
 });
 
-// Catch-all to serve index.html for SPA routes
+// SPA fallback for non-API routes
 app.use((req, res) => {
+  if (req.path.startsWith('/api/')) return res.status(404).json({ success: false, error: 'Not found' });
   res.sendFile(path.resolve(__dirname, '../public/index.html'));
 });
 
-// Start server
 const server = app.listen(PORT, () => {
-  console.log(`====================================================`);
-  console.log(` Deployment Server — Multi-Cloud Engine`);
-  console.log(` Server running at: http://localhost:${PORT}`);
-  console.log(` Database: SQLite`);
-  console.log(` Platforms: GCP (live) · AWS (live) · Azure (live) · DigitalOcean (live)`);
-  console.log(`====================================================`);
+  console.log('====================================================');
+  console.log(' Deployment Server: multi-cloud deployment engine');
+  console.log(` Listening on http://localhost:${PORT}`);
+  console.log(' Providers: GCP (Terraform) · AWS (CLI) · Azure (CLI) · DigitalOcean (API)');
+  if (!process.env.DEPLOYMENT_API_TOKEN) console.log(' Note: set DEPLOYMENT_API_TOKEN so the GitHub bot can call the API.');
+  console.log('====================================================');
 });
 
 server.on('error', (err) => {
   if (err.code === 'EADDRINUSE') {
-    const altPort = Number(PORT) + 1;
-    console.warn(`Port ${PORT} is busy, trying port ${altPort}...`);
-    app.listen(altPort, () => {
-      console.log(`Deployment Server running at http://localhost:${altPort}`);
-    });
-  } else {
-    console.error('Server error:', err);
+    console.error(`Port ${PORT} is already in use. Set PORT to a free port.`);
+    process.exit(1);
   }
+  console.error('Server error:', err);
 });
 
-// Keep the dashboard synchronized with actual reachable services. Deployment
-// records are not treated as proof that a cloud VM still exists.
+// Reconcile deployment records with what is actually reachable. Deployment
+// records are never deleted because a probe failed.
 const healthMonitor = setInterval(() => {
-  healthService.pruneUnreachableDeployments().catch(err => {
-    console.error('[Health Monitor] Reconciliation failed:', err.message);
-  });
+  healthService.pruneUnreachableDeployments().catch(err => console.error('[Health Monitor] Reconciliation failed:', err.message));
 }, 60000);
 healthMonitor.unref();
-healthService.pruneUnreachableDeployments().catch(err => {
-  console.error('[Health Monitor] Initial reconciliation failed:', err.message);
-});
+healthService.pruneUnreachableDeployments().catch(err => console.error('[Health Monitor] Initial reconciliation failed:', err.message));

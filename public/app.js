@@ -84,8 +84,12 @@ function statusBadge(status) {
     deploying:  'badge-deploying',
     provisioning: 'badge-deploying',
     configuring: 'badge-deploying',
+    verifying:  'badge-deploying',
+    destroying: 'badge-deploying',
     degraded:   'badge-failed',
     failed:     'badge-failed',
+    registered: 'badge-info',
+    destroyed:  'badge-info',
   };
   const cls = map[status] || 'badge-info';
   return `<span class="badge ${cls}"><span class="badge-dot"></span>${status}</span>`;
@@ -262,11 +266,11 @@ async function loadInstances() {
 document.getElementById('refresh-instances-btn').addEventListener('click', loadInstances);
 
 window.triggerFastUpdate = async function(id) {
-  toast('Initiating Zero-Downtime Blue/Green deployment...', 'info');
+  toast('Starting zero-downtime update from the latest commit...', 'info');
   try {
     const res = await apiFetch(`/api/deployments/${id}/update`, { method: 'POST' });
     if (res.success) {
-      toast(`B/G hot-swap to ${res.nextSlot?.toUpperCase() || 'next'} slot initiated — 0.00s downtime.`, 'success', 7000);
+      toast('Update started. Docker apps build in the idle slot and switch only after a health check; follow the log for progress.', 'success', 8000);
       setTimeout(loadInstances, 2000);
     } else {
       toast(res.error, 'error');
@@ -295,8 +299,20 @@ window.enableDeploymentSsl = async function (id) {
 };
 
 window.deleteDeployment = async function(id) {
-  if (!confirm('Delete this deployment record? This does not destroy the cloud VM.')) return;
   try {
+    const dep = (await apiFetch(`/api/deployments/${id}`)).deployment;
+    const hasCloud = dep && !dep.simulated && dep.vm_ip && !['destroyed', 'registered'].includes(dep.status);
+    if (hasCloud) {
+      if (confirm(`Destroy the cloud VM for "${dep.repo_name}" (${dep.vm_ip}) and all its resources?\n\nOK = tear down the VM.  Cancel = keep it.`)) {
+        const res = await apiFetch(`/api/deployments/${id}/destroy`, { method: 'POST' });
+        toast(res.success ? 'Teardown started. Follow the log for progress.' : res.error, res.success ? 'success' : 'error', 7000);
+        loadInstances();
+        return;
+      }
+      if (!confirm('Remove only the dashboard record? The VM keeps running and keeps costing money.')) return;
+    } else if (!confirm('Remove this deployment record?')) {
+      return;
+    }
     const res = await apiFetch(`/api/deployments/${id}`, { method: 'DELETE' });
     if (res.success) { toast('Deployment record removed.', 'success'); loadInstances(); }
     else toast(res.error, 'error');
@@ -368,7 +384,7 @@ window.openLogModal = async function(id, name) {
     if (badge) badge.style.display = 'inline-block';
 
     let initialCleared = false;
-    logEventSource = new EventSource(`/api/deployments/${id}/logs/stream`);
+    logEventSource = new EventSource(`${API}/api/deployments/${id}/logs/stream?token=${encodeURIComponent(authToken || '')}`, { withCredentials: true });
 
     logEventSource.onmessage = (event) => {
       try {
@@ -447,7 +463,9 @@ window.openMetricsModal = async function(id, name) {
           document.getElementById('metric-disk-bar').style.width = `${m.disk.percent}%`;
 
           // Network
-          document.getElementById('metric-net-val').textContent = `RX: ${m.network.rxMb} MB / TX: ${m.network.txMb} MB`;
+          document.getElementById('metric-net-val').textContent = `↓ ${m.network.rxKBps} KB/s · ↑ ${m.network.txKBps} KB/s (total ${m.network.rxMb} / ${m.network.txMb} MB)`;
+        } else {
+          document.getElementById('metric-net-val').textContent = res.error || 'Metrics unavailable';
         }
       } catch (err) {
         console.error('Metrics fetch error:', err);
@@ -455,7 +473,7 @@ window.openMetricsModal = async function(id, name) {
     }
 
     await fetchMetrics();
-    metricsTimer = setInterval(fetchMetrics, 2000);
+    metricsTimer = setInterval(fetchMetrics, 10000); // read over SSH; the server caches 10 s
   } catch (err) {
     console.error('Error opening metrics modal:', err);
   }
@@ -1088,21 +1106,8 @@ const gcpBuffer = {
   disk: []
 };
 
-// Seed buffer so charts render realistic timeseries immediately
-(function seedInitialGcpData() {
-  const now = Date.now();
-  for (let i = 18; i >= 0; i--) {
-    const t = new Date(now - i * 5000);
-    gcpBuffer.timestamps.push(t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-    gcpBuffer.cpu.push(Number((6.5 + Math.sin(i * 0.7) * 4.2 + (Math.random() * 3.1)).toFixed(1)));
-    const ram = Math.round(195 + Math.sin(i * 0.5) * 35 + (Math.random() * 20));
-    gcpBuffer.ramMb.push(ram);
-    gcpBuffer.ramPct.push(Number(((ram / 1024) * 100).toFixed(1)));
-    gcpBuffer.netRx.push(Number((14.2 + Math.cos(i * 0.8) * 8.5 + (Math.random() * 5.2)).toFixed(1)));
-    gcpBuffer.netTx.push(Number((8.1 + Math.sin(i * 0.9) * 5.3 + (Math.random() * 3.4)).toFixed(1)));
-    gcpBuffer.disk.push(Math.round(4 + Math.sin(i * 0.6) * 3 + Math.random() * 4));
-  }
-})();
+// Charts start empty and fill with real samples read from the VMs.
+
 
 // Reusable GCP Timeseries Chart Renderer with full X & Y Axes, Gridlines and Crosshair
 function renderGcpTimeseriesChart(canvasId, tipId, config) {
@@ -1370,7 +1375,7 @@ async function loadObservability() {
     const res = await apiFetch('/api/deployments');
     if (!res?.success) return;
 
-    const ready = res.deployments.filter(d => d.status === 'ready');
+    const ready = res.deployments.filter(d => d.status === 'ready' && !d.simulated);
     const container = document.getElementById('observability-instances');
     const healthLog = document.getElementById('health-probe-log');
     const instanceSelect = document.getElementById('gcp-metric-instance-select');
@@ -1421,9 +1426,11 @@ async function loadObservability() {
       // Update header badges on charts
       document.getElementById('gcp-stat-cpu').textContent = avgCpu;
       document.getElementById('gcp-stat-ram').textContent = avgRamMb;
-      const sampleRx = Number((validMetrics[0]?.network?.rxMb || 14) * 1.2).toFixed(1);
-      document.getElementById('gcp-stat-net').textContent = sampleRx;
-      document.getElementById('gcp-stat-disk').textContent = (validMetrics[0]?.disk?.percent || 6);
+      const rxRate = validMetrics.reduce((s, m) => s + Number(m.network.rxKBps || 0), 0);
+      const txRate = validMetrics.reduce((s, m) => s + Number(m.network.txKBps || 0), 0);
+      const diskPct = Math.round(validMetrics.reduce((s, m) => s + m.disk.percent, 0) / validMetrics.length);
+      document.getElementById('gcp-stat-net').textContent = rxRate.toFixed(1);
+      document.getElementById('gcp-stat-disk').textContent = diskPct;
 
       // Append new data point to rolling buffer
       const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -1431,9 +1438,9 @@ async function loadObservability() {
       gcpBuffer.cpu.push(Number(avgCpu));
       gcpBuffer.ramMb.push(avgRamMb);
       gcpBuffer.ramPct.push(avgRamPct);
-      gcpBuffer.netRx.push(Number(sampleRx));
-      gcpBuffer.netTx.push(Number((sampleRx * 0.6).toFixed(1)));
-      gcpBuffer.disk.push(Math.round(4 + Math.random() * 5));
+      gcpBuffer.netRx.push(Number(rxRate.toFixed(1)));
+      gcpBuffer.netTx.push(Number(txRate.toFixed(1)));
+      gcpBuffer.disk.push(diskPct);
 
       // Keep max 20 data points
       if (gcpBuffer.timestamps.length > 20) {
@@ -1498,7 +1505,7 @@ async function loadObservability() {
       validMetrics.forEach(m => {
         const line = document.createElement('div');
         const statusClass = m.status === 'ready' ? 'log-ok' : 'log-warn';
-        line.innerHTML = `<span class="log-info">[${now}]</span> <span class="${statusClass}">[HealthProbe]</span> ${escHtml(m.repoName)} @ ${m.ip || 'pending'} → HTTP 200 OK | CPU: ${m.cpuPercent}% | RAM: ${m.memory.percent}% | Slot: ${(ready.find(d => d.repo_name === m.repoName)?.active_slot || 'blue').toUpperCase()}`;
+        line.innerHTML = `<span class="log-info">[${now}]</span> <span class="${statusClass}">[VM]</span> ${escHtml(m.repoName)} @ ${m.ip || 'pending'} | status ${escHtml(m.status)} | CPU ${m.cpuPercent}% | RAM ${m.memory.percent}% | disk ${m.disk.percent}% | ${m.containers} container(s) | slot ${(ready.find(d => d.repo_name === m.repoName)?.active_slot || 'blue').toUpperCase()}`;
         healthLog.appendChild(line);
         healthLog.scrollTop = healthLog.scrollHeight;
       });
@@ -1514,7 +1521,7 @@ document.getElementById('refresh-observability-btn').addEventListener('click', l
 function startObservabilityAutoRefresh() {
   loadObservability();
   if (!observabilityTimer) {
-    observabilityTimer = setInterval(loadObservability, 5000);
+    observabilityTimer = setInterval(loadObservability, 15000); // metrics are read from the VMs over SSH
   }
 }
 
@@ -1547,8 +1554,8 @@ window.openTerminalModal = function(id, name) {
   document.getElementById('terminal-prompt').textContent = `root@${name} ~ $`;
   const out = document.getElementById('terminal-output');
   out.innerHTML = '';
-  termPrint(`Deployment Server Web Terminal — Connected to ${name} (ID: ${id})`, 'output');
-  termPrint(`Instance: ${name} | Type a command below or try: docker ps, top, cat /etc/nginx/...`, 'output');
+  termPrint(`Deployment Server web terminal for ${name} (deployment #${id})`, 'output');
+  termPrint(`Each command runs as root on the VM over SSH, in /opt/${name}. Try: docker ps, systemctl status nginx, tail -n 50 /var/log/devlups-deployment.log`, 'output');
   termPrint(`─────────────────────────────────────────────────────────`, 'output');
   document.getElementById('terminal-modal').classList.add('open');
   setTimeout(() => document.getElementById('terminal-input').focus(), 100);
@@ -1614,6 +1621,14 @@ document.getElementById('terminal-modal').addEventListener('click', e => {
 // ══════════════════════════════════════════════════════
 // BACKEND STATUS & CONFIGURATION (OPTION 2)
 // ══════════════════════════════════════════════════════
+// AbortSignal.timeout() is missing in older browsers (e.g. Firefox ESR < 100).
+function timeoutSignal(ms) {
+  if (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) return AbortSignal.timeout(ms);
+  const c = new AbortController();
+  setTimeout(() => c.abort(), ms);
+  return c.signal;
+}
+
 async function checkBackendHealth() {
   const dot = document.getElementById('backend-status-dot');
   const txt = document.getElementById('backend-status-text');
@@ -1622,7 +1637,7 @@ async function checkBackendHealth() {
   const displayUrl = API ? API.replace(/^https?:\/\//, '') : 'Same Origin';
 
   try {
-    const res = await fetch((API || '') + '/api/system/stats', { signal: AbortSignal.timeout(3500) });
+    const res = await fetch((API || '') + '/api/health', { signal: timeoutSignal(3500) });
     if (res.ok) {
       dot.style.background = '#10B981';
       txt.textContent = `API: ${displayUrl}`;
@@ -1676,12 +1691,12 @@ document.getElementById('btn-test-backend')?.addEventListener('click', async () 
   testStatusEl.textContent = 'Testing connection...';
 
   try {
-    const res = await fetch((target || '') + '/api/system/stats', { signal: AbortSignal.timeout(4000) });
+    const res = await fetch((target || '') + '/api/health', { signal: timeoutSignal(4000) });
     if (res.ok) {
       const data = await res.json();
       testStatusEl.style.background = 'rgba(16, 185, 129, 0.1)';
       testStatusEl.style.color = '#10B981';
-      testStatusEl.textContent = `✓ Success! Backend reachable (Platform: ${data.stats?.platform || 'Deployment Server'}).`;
+      testStatusEl.textContent = `✓ Success! Deployment Server API is reachable (uptime ${Math.round(data.uptime || 0)} s).`;
     } else {
       testStatusEl.style.background = 'rgba(239, 68, 68, 0.1)';
       testStatusEl.style.color = '#EF4444';

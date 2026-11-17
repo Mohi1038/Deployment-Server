@@ -1,6 +1,6 @@
 /**
  * Devlups Lab — Multi-Cloud Pricing & Arbitrage Engine
- * Real-time hourly & monthly cost estimation across GCP, AWS, Azure, DigitalOcean
+ * Hourly & monthly cost estimates from a list-price table across GCP, AWS, Azure, DigitalOcean
  */
 
 export const PRICING_DATA = {
@@ -85,7 +85,7 @@ export const pricingService = {
    * Determine the cheapest provider from a list of available verified credentials
    */
   selectCheapestProvider(credentials = [], tier = 'e2-micro') {
-    if (!credentials || credentials.length === 0) return 'digitalocean';
+    if (!credentials || credentials.length === 0) return null;
 
     let cheapestCred = null;
     let lowestCost = Infinity;

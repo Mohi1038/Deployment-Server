@@ -91,7 +91,7 @@ export const healthService = {
    */
   async pruneUnreachableDeployments(workspaceId = null) {
     const deployments = db.getDeployments(workspaceId);
-    const candidates = deployments.filter(d => ['ready', 'degraded'].includes(d.status));
+    const candidates = deployments.filter(d => ['ready', 'degraded'].includes(d.status) && !d.simulated);
 
     await Promise.all(candidates.map(async (deployment) => {
       const createdAt = deployment.created_at ? new Date(`${deployment.created_at.replace(' ', 'T')}Z`).getTime() : NaN;
